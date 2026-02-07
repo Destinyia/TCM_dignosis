@@ -1,0 +1,9 @@
+experiment:
+  name: "weighted_ce"
+  description: "Weighted cross-entropy experiment"
+
+_base_: "baseline.yaml"
+
+loss:
+  type: "weighted_ce"
+  class_weights: null

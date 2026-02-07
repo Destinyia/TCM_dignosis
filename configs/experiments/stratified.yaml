@@ -1,0 +1,8 @@
+experiment:
+  name: "stratified"
+  description: "Stratified sampler"
+
+_base_: "baseline.yaml"
+
+sampler:
+  type: "stratified"

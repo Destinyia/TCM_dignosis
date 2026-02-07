@@ -1,0 +1,13 @@
+experiment:
+  name: "tcm_prior_augment"
+  description: "TCM prior augmentation"
+
+_base_: "baseline.yaml"
+
+augmentation:
+  type: "tcm_prior"
+  horizontal_flip: true
+  brightness_contrast: true
+  hue_saturation: true
+  mosaic: false
+  mixup: false

@@ -1,0 +1,13 @@
+experiment:
+  name: "strong_augment"
+  description: "Strong augmentation"
+
+_base_: "baseline.yaml"
+
+augmentation:
+  type: "strong"
+  horizontal_flip: true
+  brightness_contrast: true
+  hue_saturation: true
+  mosaic: true
+  mixup: true

@@ -1,0 +1,9 @@
+experiment:
+  name: "weighted_ce_sqrt"
+  description: "Weighted cross-entropy (sqrt inverse)"
+
+_base_: "weighted_ce.yaml"
+
+loss:
+  type: "weighted_ce"
+  class_weights: null

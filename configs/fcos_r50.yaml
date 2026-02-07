@@ -1,0 +1,5 @@
+_base_: "base.yaml"
+
+model:
+  backbone: "resnet50"
+  head: "fcos"

@@ -1,0 +1,19 @@
+experiment:
+  name: "baseline"
+  description: "Baseline experiment"
+
+_base_: "../base.yaml"
+
+loss:
+  type: "ce"
+
+sampler:
+  type: "default"
+
+augmentation:
+  type: "basic"
+  horizontal_flip: true
+  brightness_contrast: true
+  hue_saturation: false
+  mosaic: false
+  mixup: false

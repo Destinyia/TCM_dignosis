@@ -1,0 +1,10 @@
+experiment:
+  name: "focal_loss"
+  description: "Focal loss experiment"
+
+_base_: "baseline.yaml"
+
+loss:
+  type: "focal"
+  focal_alpha: 0.25
+  focal_gamma: 2.0

@@ -1,0 +1,17 @@
+experiment:
+  name: "combined"
+  description: "Best combined strategy"
+
+_base_: "baseline.yaml"
+
+sampler:
+  type: "oversample"
+  oversample_factor: 2.0
+
+loss:
+  type: "focal"
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+
+augmentation:
+  type: "tcm_prior"
