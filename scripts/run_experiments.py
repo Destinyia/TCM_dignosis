@@ -6,16 +6,17 @@ import subprocess
 
 EXPERIMENTS = [
     "baseline",
+    "combined",
+    "oversampling",
+    "stratified",
     "focal_loss",
     "weighted_ce",
     "weighted_ce_sqrt",
-    "oversampling",
-    "oversample_focal",
-    "stratified",
     "class_balanced_focal",
+    "oversample_focal",
+    "augment_test",
     "strong_augment",
     "tcm_prior_augment",
-    "combined",
 ]
 
 
@@ -85,8 +86,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--only",
-        default="baseline",
-        help="Comma-separated experiment names to run (default: baseline)",
+        default="baseline,combined,oversampling,stratified,focal_loss,weighted_ce,weighted_ce_sqrt,class_balanced_focal,oversample_focal",
+        help="Comma-separated experiment names to run (default: imbalance-focused experiments)",
     )
     parser.add_argument("--skip", help="Comma-separated experiment names to skip")
     parser.add_argument("--list", action="store_true", help="List available experiments")
@@ -97,7 +98,7 @@ def main():
     parser.add_argument("--train-size", type=int, default=4000)
     parser.add_argument("--val-size", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--image-size", nargs=2, type=int, default=[1024, 1024])
+    parser.add_argument("--image-size", nargs=2, type=int, default=[800, 800])
     args = parser.parse_args()
 
     if args.list:

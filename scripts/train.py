@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader, Subset
 from tcm_tongue.config import Config
 from tcm_tongue.data import TrainTransform, ValTransform, TongueCocoDataset, create_sampler
 from tcm_tongue.engine import COCOEvaluator, Trainer
-from tcm_tongue.utils import plot_per_class_ap_ar
+from tcm_tongue.utils import plot_per_class_ap_ar, plot_loss_curves
 from tcm_tongue.models import build_detector
 
 
@@ -43,16 +43,51 @@ def build_dataloader(cfg: Config, split: str, train: bool, subset_size: int | No
     image_size = getattr(cfg.data, "image_size", (800, 800))
     if isinstance(image_size, list):
         image_size = tuple(image_size)
+    augmentation = getattr(cfg, "augmentation", None)
+    use_strong = False
+    use_tcm_prior = False
+    if augmentation is not None:
+        use_strong = getattr(augmentation, "type", "") == "strong"
+        use_tcm_prior = getattr(augmentation, "type", "") == "tcm_prior"
+    aug_flip = getattr(augmentation, "horizontal_flip", True) if augmentation is not None else True
+    aug_bc = getattr(augmentation, "brightness_contrast", True) if augmentation is not None else True
+    aug_hs = getattr(augmentation, "hue_saturation", True) if augmentation is not None else True
+    aug_noise = getattr(augmentation, "gauss_noise", True) if augmentation is not None else True
+    tcm_prior_prob = (
+        getattr(augmentation, "tcm_prior_prob", 0.3) if augmentation is not None else 0.3
+    )
     transform = (
-        TrainTransform(image_size=image_size, normalize=normalize, resize=resize)
+        TrainTransform(
+            image_size=image_size,
+            normalize=normalize,
+            resize=resize,
+            horizontal_flip=aug_flip,
+            brightness_contrast=aug_bc,
+            hue_saturation=aug_hs,
+            gauss_noise=aug_noise,
+            strong=use_strong,
+            tcm_prior=use_tcm_prior,
+            tcm_prior_prob=tcm_prior_prob,
+        )
         if train
         else ValTransform(image_size=image_size, normalize=normalize, resize=resize)
     )
+    mosaic_prob = 0.0
+    mixup_prob = 0.0
+    if train and augmentation is not None:
+        if getattr(augmentation, "mosaic", False):
+            mosaic_prob = float(getattr(augmentation, "mosaic_prob", 0.5))
+        if getattr(augmentation, "mixup", False):
+            mixup_prob = float(getattr(augmentation, "mixup_prob", 0.2))
     dataset = TongueCocoDataset(
         root=cfg.data.root,
         split=split,
         transforms=transform,
         label_offset=getattr(cfg.data, "label_offset", 0),
+        mosaic_prob=mosaic_prob,
+        mixup_prob=mixup_prob,
+        image_size=image_size,
+        class_filter=getattr(cfg.data, "class_filter", None),
     )
     dataset, _ = _subset_dataset(dataset, subset_size, seed)
 
@@ -145,9 +180,9 @@ def _print_env_config(cfg: Config, args: argparse.Namespace, device: str) -> Non
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/experiments/class_balanced_focal.yaml")
+    parser.add_argument("--config", default="configs/experiments/augment_test.yaml")
     timestamp=datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    parser.add_argument("--output-dir", default=f"runs/experiments/class_balanced_focal_4000_{timestamp}")
+    parser.add_argument("--output-dir", default=f"runs/experiments/augment_test_4000_{timestamp}")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=4)
@@ -158,7 +193,7 @@ def main():
     parser.add_argument("--image-size", nargs=2, type=int, default=[800, 800], help="Image size, e.g. --image-size 800 800 (default from config).")
     parser.add_argument("--log-interval", type=int, default=50)
     parser.add_argument("--train-metric-samples", type=int, default=200)
-    parser.add_argument("--early-stop-patience", type=int, default=5)
+    parser.add_argument("--early-stop-patience", type=int, default=8)
     parser.add_argument("--early-stop-min-delta", type=float, default=0.001)
     parser.add_argument("--early-stop-metric", default="mAP")
     args = parser.parse_args()
@@ -213,12 +248,20 @@ def main():
     train_summary = trainer.train()
 
     evaluator = COCOEvaluator(val_loader.dataset)
-    metrics = evaluator.evaluate(model, val_loader, device=device)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pr_dir = output_dir / "per_class_pr_curves"
+    metrics = evaluator.evaluate(
+        model,
+        val_loader,
+        device=device,
+        plot_dir=str(pr_dir),
+        plot_pr=True,
+        pr_iou=0.5,
+    )
     if train_summary:
         metrics.update({k: v for k, v in train_summary.items() if v is not None})
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     ap_plot = output_dir / "per_class_metrics.png"
     plotted = plot_per_class_ap_ar(
@@ -231,6 +274,12 @@ def main():
         print(f"Saved per-class plot: {ap_plot}")
     else:
         print("Skipped per-class plot (missing data or matplotlib).")
+
+    loss_plot = output_dir / "loss_curves.png"
+    if plot_loss_curves(output_dir / "metrics_history.jsonl", loss_plot):
+        print(f"Saved loss curves: {loss_plot}")
+    else:
+        print("Skipped loss curves (missing history or matplotlib).")
 
 
 if __name__ == "__main__":

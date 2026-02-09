@@ -41,6 +41,7 @@ def build_val_loader(cfg: Config, subset_size: int | None):
         split=cfg.data.val_split,
         transforms=transform,
         label_offset=getattr(cfg.data, "label_offset", 0),
+        class_filter=getattr(cfg.data, "class_filter", None),
     )
     dataset = _subset_dataset(dataset, subset_size)
 

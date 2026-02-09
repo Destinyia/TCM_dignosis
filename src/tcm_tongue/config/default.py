@@ -16,6 +16,7 @@ class DataConfig:
     num_classes: int = 21
     label_offset: int = 1
     image_size: List[int] = field(default_factory=lambda: [800, 800])
+    class_filter: Optional[List[str]] = None
     batch_size: int = 8
     num_workers: int = 4
     normalize: bool = False
@@ -58,12 +59,27 @@ class SamplerConfig:
 
 
 @dataclass
+class AugmentationConfig:
+    type: str = "basic"  # basic, strong, tcm_prior
+    horizontal_flip: bool = True
+    brightness_contrast: bool = True
+    hue_saturation: bool = True
+    gauss_noise: bool = True
+    mosaic: bool = False
+    mixup: bool = False
+    mosaic_prob: float = 0.5
+    mixup_prob: float = 0.2
+    tcm_prior_prob: float = 0.3
+
+
+@dataclass
 class Config:
     data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     sampler: SamplerConfig = field(default_factory=SamplerConfig)
+    augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
 
     @classmethod
     def from_yaml(cls, path: str) -> "Config":
@@ -90,6 +106,7 @@ class Config:
             train=_load_section(TrainConfig, merged.get("train", {})),
             loss=_load_section(LossConfig, merged.get("loss", {})),
             sampler=_load_section(SamplerConfig, merged.get("sampler", {})),
+            augmentation=_load_section(AugmentationConfig, merged.get("augmentation", {})),
         )
 
     def to_yaml(self, path: str) -> None:
@@ -101,6 +118,7 @@ class Config:
             "train": asdict(self.train),
             "loss": asdict(self.loss),
             "sampler": asdict(self.sampler),
+            "augmentation": asdict(self.augmentation),
         }
         path_obj.parent.mkdir(parents=True, exist_ok=True)
         with path_obj.open("w", encoding="utf-8") as f:

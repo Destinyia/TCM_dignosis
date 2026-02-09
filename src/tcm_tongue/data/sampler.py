@@ -4,7 +4,7 @@ from typing import Dict, Iterator, List, Optional
 
 import numpy as np
 import torch
-from torch.utils.data import Sampler, WeightedRandomSampler
+from torch.utils.data import Sampler, WeightedRandomSampler, Subset
 
 from .dataset import TongueCocoDataset
 
@@ -22,7 +22,8 @@ class ClassBalancedSampler(Sampler):
         self._compute_weights()
 
     def _compute_weights(self):
-        counts = self.dataset.get_category_counts()
+        base, indices = _resolve_dataset_indices(self.dataset)
+        counts = _get_category_counts(base, indices)
         max_count = max(counts.values()) if counts else 1
         class_weights = {
             cls_id: max_count / max(count, 1) for cls_id, count in counts.items()
@@ -30,12 +31,10 @@ class ClassBalancedSampler(Sampler):
 
         tail_classes = {cls_id for cls_id, count in counts.items() if count < 100}
         weights: List[float] = []
-        for img_info in self.dataset.images:
-            anns = self.dataset._annotations_by_image_id.get(img_info["id"], [])
-            labels = [
-                self.dataset._cat_id_to_contiguous.get(ann.get("category_id"))
-                for ann in anns
-            ]
+        image_infos = _select_image_infos(base, indices)
+        for img_info in image_infos:
+            anns = base._annotations_by_image_id.get(img_info["id"], [])
+            labels = [base._cat_id_to_contiguous.get(ann.get("category_id")) for ann in anns]
             labels = [l for l in labels if l is not None]
             if not labels:
                 weights.append(1.0)
@@ -74,18 +73,17 @@ class StratifiedSampler(Sampler):
 
     def _build_indices(self) -> List[int]:
         label_to_indices: Dict[int, List[int]] = {}
-        for idx, img_info in enumerate(self.dataset.images):
-            anns = self.dataset._annotations_by_image_id.get(img_info["id"], [])
-            labels = [
-                self.dataset._cat_id_to_contiguous.get(ann.get("category_id"))
-                for ann in anns
-            ]
+        base, indices = _resolve_dataset_indices(self.dataset)
+        image_infos = _select_image_infos(base, indices)
+        for pos, img_info in enumerate(image_infos):
+            anns = base._annotations_by_image_id.get(img_info["id"], [])
+            labels = [base._cat_id_to_contiguous.get(ann.get("category_id")) for ann in anns]
             labels = [l for l in labels if l is not None]
             if not labels:
                 label = -1
             else:
                 label = labels[0]
-            label_to_indices.setdefault(label, []).append(idx)
+            label_to_indices.setdefault(label, []).append(pos)
 
         # Round-robin interleave across labels to improve diversity per batch.
         buckets = [indices[:] for _, indices in sorted(label_to_indices.items())]
@@ -122,7 +120,8 @@ class UnderSampler(Sampler):
         self._compute_weights()
 
     def _compute_weights(self):
-        counts = self.dataset.get_category_counts()
+        base, indices = _resolve_dataset_indices(self.dataset)
+        counts = _get_category_counts(base, indices)
         if not counts:
             self._weights = torch.ones(len(self.dataset), dtype=torch.double)
             self._sampler = WeightedRandomSampler(self._weights, len(self._weights), replacement=True)
@@ -133,12 +132,10 @@ class UnderSampler(Sampler):
         head_classes = {cls_id for cls_id, count in counts.items() if count >= median}
 
         weights: List[float] = []
-        for img_info in self.dataset.images:
-            anns = self.dataset._annotations_by_image_id.get(img_info["id"], [])
-            labels = [
-                self.dataset._cat_id_to_contiguous.get(ann.get("category_id"))
-                for ann in anns
-            ]
+        image_infos = _select_image_infos(base, indices)
+        for img_info in image_infos:
+            anns = base._annotations_by_image_id.get(img_info["id"], [])
+            labels = [base._cat_id_to_contiguous.get(ann.get("category_id")) for ann in anns]
             labels = [l for l in labels if l is not None]
             if not labels:
                 weights.append(1.0)
@@ -178,3 +175,31 @@ def create_sampler(
     if sampler_type not in samplers:
         raise ValueError(f"Unknown sampler type: {sampler_type}")
     return samplers[sampler_type](dataset, **kwargs)
+
+
+def _resolve_dataset_indices(dataset):
+    if isinstance(dataset, Subset):
+        return dataset.dataset, list(dataset.indices)
+    return dataset, None
+
+
+def _select_image_infos(dataset, indices):
+    if indices is None:
+        return list(dataset.images)
+    return [dataset.images[i] for i in indices]
+
+
+def _get_category_counts(dataset, indices):
+    if indices is None and hasattr(dataset, "get_category_counts"):
+        return dataset.get_category_counts()
+    counts: Dict[int, int] = {}
+    cat_ids = getattr(dataset, "category_ids", [])
+    if cat_ids:
+        counts = {idx: 0 for idx in range(len(cat_ids))}
+    for img_info in _select_image_infos(dataset, indices):
+        anns = dataset._annotations_by_image_id.get(img_info["id"], [])
+        for ann in anns:
+            label = dataset._cat_id_to_contiguous.get(ann.get("category_id"))
+            if label is not None:
+                counts[label] = counts.get(label, 0) + 1
+    return counts

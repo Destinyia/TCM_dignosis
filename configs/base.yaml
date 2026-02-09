@@ -7,6 +7,7 @@ data:
   num_workers: 4
   num_classes: 21
   label_offset: 1
+  class_filter: null
   normalize: false
   resize_in_dataset: false
 
@@ -35,3 +36,15 @@ loss:
 sampler:
   type: "default"
   oversample_factor: 2.0
+
+augmentation:
+  type: "basic"
+  horizontal_flip: true
+  brightness_contrast: true
+  hue_saturation: true
+  gauss_noise: true
+  mosaic: false
+  mixup: false
+  mosaic_prob: 0.5
+  mixup_prob: 0.2
+  tcm_prior_prob: 0.3

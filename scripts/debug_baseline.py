@@ -38,6 +38,7 @@ def build_subset_loader(cfg: Config, split: str, train: bool, size: int, seed: i
         split=split,
         transforms=transform,
         label_offset=getattr(cfg.data, "label_offset", 0),
+        class_filter=getattr(cfg.data, "class_filter", None),
     )
     indices = _pick_indices(len(dataset), size, seed, shuffle)
     subset = Subset(dataset, indices)

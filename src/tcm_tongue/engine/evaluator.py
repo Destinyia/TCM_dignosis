@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from pathlib import Path
 from contextlib import contextmanager, redirect_stdout
 from typing import Dict, List, Optional, Tuple
 
@@ -64,6 +65,9 @@ class COCOEvaluator:
         model: nn.Module,
         dataloader: DataLoader,
         device: str = "cuda",
+        plot_dir: str | None = None,
+        plot_pr: bool = False,
+        pr_iou: float = 0.5,
     ) -> Dict[str, float | Dict[str, float]]:
         model.eval()
         predictions: List[Dict] = []
@@ -150,6 +154,9 @@ class COCOEvaluator:
         metrics["per_class_AP50"] = self._compute_per_class_ap_at_iou(coco_eval, iou_index=0)
         metrics["per_class_AR"] = self._compute_per_class_ar(coco_eval)
         metrics["per_class_AR50"] = self._compute_per_class_ar_at_iou(coco_eval, iou_index=0)
+
+        if plot_dir and plot_pr:
+            _plot_per_class_pr_curves(coco_eval, self.dataset, plot_dir, iou=pr_iou)
         return metrics
 
     def _compute_per_class_ap(self, coco_eval: COCOeval) -> Dict[str, float]:
@@ -326,6 +333,57 @@ def format_per_class_metrics(
         )
     lines.append(rule)
     return "\n".join(lines)
+
+
+def _plot_per_class_pr_curves(
+    coco_eval: COCOeval, dataset, plot_dir: str, iou: float = 0.5
+) -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        return
+
+    precision = coco_eval.eval.get("precision")
+    if precision is None:
+        return
+
+    iou_thrs = coco_eval.params.iouThrs
+    if iou_thrs is None or len(iou_thrs) == 0:
+        return
+    iou_index = int((abs(iou_thrs - iou)).argmin())
+
+    rec_thrs = coco_eval.params.recThrs
+    if rec_thrs is None or len(rec_thrs) == 0:
+        return
+
+    cat_ids = coco_eval.params.catIds
+    cat_id_to_name = _category_id_to_name(dataset)
+    out_dir = Path(plot_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for idx, cat_id in enumerate(cat_ids):
+        pr = precision[iou_index, :, idx, 0, -1]
+        if pr is None:
+            continue
+        valid = pr > -1
+        if not valid.any():
+            continue
+        recalls = rec_thrs[valid]
+        precisions = pr[valid]
+        auc = float(np.trapz(precisions, recalls)) if recalls.size > 0 else 0.0
+        name = cat_id_to_name.get(cat_id, str(cat_id))
+        safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in name)
+
+        plt.figure(figsize=(5, 4))
+        plt.plot(recalls, precisions, label=f"AUC={auc:.3f}")
+        plt.xlabel("Recall")
+        plt.ylabel("Precision")
+        plt.title(f"{name} (IoU={iou:.2f})")
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc="best")
+        plt.tight_layout()
+        plt.savefig(out_dir / f"pr_{safe_name}.png", dpi=150)
+        plt.close()
 
 
 def _resolve_annotation_path(dataset) -> str | None:

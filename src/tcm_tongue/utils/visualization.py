@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict
+import json
 
 
 def plot_per_class_ap_ar(
@@ -43,6 +44,47 @@ def plot_per_class_ap_ar(
     axes[1].grid(True, axis="x", alpha=0.3)
 
     fig.tight_layout(rect=(0, 0, 1, 0.96))
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return True
+
+
+def plot_loss_curves(history_path: str | Path, out_path: str | Path) -> bool:
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        return False
+
+    history_path = Path(history_path)
+    if not history_path.is_file():
+        return False
+
+    epochs = []
+    train_loss = []
+    val_loss = []
+    for line in history_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if "epoch" in record:
+            epochs.append(record["epoch"])
+            train_loss.append(record.get("train_train_loss"))
+            val_loss.append(record.get("val_loss"))
+
+    if not epochs:
+        return False
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(epochs, train_loss, label="train_loss")
+    if any(v is not None for v in val_loss):
+        ax.plot(epochs, val_loss, label="val_loss")
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("loss")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150)

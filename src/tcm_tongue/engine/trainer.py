@@ -170,6 +170,9 @@ class Trainer:
 
         evaluator = COCOEvaluator(self.val_loader.dataset, silent=True)
         metrics = evaluator.evaluate(self.model, self.val_loader, self.device)
+        val_loss = self._compute_val_loss()
+        if val_loss is not None:
+            metrics["loss"] = val_loss
         print("Val bbox")
         print(format_coco_metrics(metrics))
         print("Per-class AP/AR")
@@ -182,6 +185,31 @@ class Trainer:
             )
         )
         return metrics
+
+    @torch.no_grad()
+    def _compute_val_loss(self) -> Optional[float]:
+        if self.val_loader is None:
+            return None
+        was_training = self.model.training
+        self.model.train()
+        total_loss = 0.0
+        total_steps = 0
+        autocast_ctx = _autocast() if self.amp else nullcontext()
+        for images, targets in self.val_loader:
+            images = [img.to(self.device) for img in images]
+            targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
+            with autocast_ctx:
+                losses, _ = self.model(images, targets)
+                loss = sum(losses.values())
+            total_loss += float(loss.item())
+            total_steps += 1
+        if was_training:
+            self.model.train()
+        else:
+            self.model.eval()
+        if total_steps == 0:
+            return None
+        return total_loss / total_steps
 
     def _compute_train_map50(self) -> Optional[float]:
         if self.train_metric_samples <= 0:

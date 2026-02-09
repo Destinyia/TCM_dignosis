@@ -1,14 +1,8 @@
 experiment:
-  name: "baseline"
-  description: "Baseline experiment"
+  name: "augment_test"
+  description: "Test tcm_prior / mosaic / mixup / strong augmentation"
 
-_base_: "../base.yaml"
-
-loss:
-  type: "ce"
-
-sampler:
-  type: "default"
+_base_: "baseline.yaml"
 
 augmentation:
   type: "strong"

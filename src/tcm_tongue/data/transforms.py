@@ -51,6 +51,13 @@ class TrainTransform(BaseTransform):
         use_mixup: bool = False,
         normalize: bool = True,
         resize: bool = True,
+        horizontal_flip: bool = True,
+        brightness_contrast: bool = True,
+        hue_saturation: bool = True,
+        gauss_noise: bool = True,
+        strong: bool = False,
+        tcm_prior: bool = False,
+        tcm_prior_prob: float = 0.3,
     ):
         if A is None or ToTensorV2 is None:
             self.transform = None
@@ -70,19 +77,43 @@ class TrainTransform(BaseTransform):
                     ),
                 ]
             )
-        ops.extend(
-            [
-                A.HorizontalFlip(p=0.5),
-                A.RandomBrightnessContrast(p=0.3),
+        if horizontal_flip:
+            ops.append(A.HorizontalFlip(p=0.5))
+        if brightness_contrast:
+            ops.append(A.RandomBrightnessContrast(p=0.3))
+        if hue_saturation:
+            ops.append(
                 A.HueSaturationValue(
                     hue_shift_limit=10,
                     sat_shift_limit=20,
                     val_shift_limit=20,
                     p=0.3,
-                ),
-                A.GaussNoise(p=0.1),
-            ]
-        )
+                )
+            )
+        if gauss_noise:
+            ops.append(A.GaussNoise(p=0.1))
+        if strong:
+            ops.extend(
+                [
+                    A.Affine(
+                        translate_percent=0.05,
+                        scale=(0.8, 1.2),
+                        rotate=(-10, 10),
+                        border_mode=0,
+                        fill=(114, 114, 114),
+                        p=0.3,
+                    ),
+                    A.RandomGamma(p=0.2),
+                ]
+            )
+        if tcm_prior:
+            prior = TonguePriorAugment()
+
+            def _apply_prior(img, **kwargs):
+                shift = np.random.choice(list(prior.color_shifts.keys()))
+                return prior.apply_constitution_shift(img, shift)
+
+            ops.append(A.Lambda(image=_apply_prior, p=float(tcm_prior_prob)))
         if normalize:
             ops.append(
                 A.Normalize(

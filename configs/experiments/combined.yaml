@@ -14,4 +14,4 @@ loss:
   focal_gamma: 2.0
 
 augmentation:
-  type: "tcm_prior"
+  type: "strong"
