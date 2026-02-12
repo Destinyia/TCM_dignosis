@@ -169,6 +169,7 @@ def create_sampler(
         "oversample": ClassBalancedSampler,
         "undersample": UnderSampler,
         "stratified": StratifiedSampler,
+        "class_aware": ClassAwareSampler,
     }
     if sampler_type == "default":
         return None
@@ -203,3 +204,69 @@ def _get_category_counts(dataset, indices):
             if label is not None:
                 counts[label] = counts.get(label, 0) + 1
     return counts
+
+
+class ClassAwareSampler(Sampler):
+    """Class-aware sampler that samples by class first, then by image.
+
+    Unlike ClassBalancedSampler which weights images, this sampler:
+    1. First randomly selects a class
+    2. Then randomly selects an image containing that class
+
+    This ensures each class appears roughly equally often per epoch.
+    """
+
+    def __init__(
+        self,
+        dataset: TongueCocoDataset,
+        num_samples_per_class: int = 4,
+    ):
+        """Initialize ClassAwareSampler.
+
+        Args:
+            dataset: The dataset to sample from.
+            num_samples_per_class: Number of samples per class per epoch.
+        """
+        self.dataset = dataset
+        self.num_samples_per_class = num_samples_per_class
+        self._build_class_to_images()
+
+    def _build_class_to_images(self) -> None:
+        """Build mapping from class to image indices."""
+        base, indices = _resolve_dataset_indices(self.dataset)
+        image_infos = _select_image_infos(base, indices)
+
+        self._class_to_images: Dict[int, List[int]] = {}
+        for pos, img_info in enumerate(image_infos):
+            anns = base._annotations_by_image_id.get(img_info["id"], [])
+            labels = [
+                base._cat_id_to_contiguous.get(ann.get("category_id"))
+                for ann in anns
+            ]
+            labels = [l for l in labels if l is not None]
+            for label in set(labels):
+                self._class_to_images.setdefault(label, []).append(pos)
+
+        # Get list of classes that have at least one image
+        self._classes = [
+            cls_id for cls_id, imgs in self._class_to_images.items()
+            if len(imgs) > 0
+        ]
+
+    def __iter__(self) -> Iterator[int]:
+        """Generate indices by class-aware sampling."""
+        indices: List[int] = []
+
+        for _ in range(self.num_samples_per_class):
+            # Shuffle classes for each round
+            class_order = np.random.permutation(self._classes).tolist()
+            for cls_id in class_order:
+                images = self._class_to_images.get(cls_id, [])
+                if images:
+                    idx = np.random.choice(images)
+                    indices.append(int(idx))
+
+        return iter(indices)
+
+    def __len__(self) -> int:
+        return len(self._classes) * self.num_samples_per_class

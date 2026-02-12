@@ -323,3 +323,218 @@ def _filter_scalar_metrics(metrics: Dict[str, object], prefix: str = "") -> Dict
         if isinstance(value, (int, float)):
             filtered[f"{prefix}{key}"] = float(value)
     return filtered
+
+
+class DecoupledTrainer(Trainer):
+    """Decoupled training for long-tailed recognition.
+
+    Two-stage training:
+    1. Stage 1: Train full model with instance-balanced sampling
+    2. Stage 2: Freeze backbone, retrain classifier with class-balanced sampling
+
+    Reference: ICLR 2020 "Decoupling Representation and Classifier for
+    Long-Tailed Recognition"
+    """
+
+    def __init__(
+        self,
+        model: nn.Module,
+        train_loader: DataLoader,
+        val_loader: Optional[DataLoader],
+        optimizer: Optimizer,
+        scheduler: Optional[_LRScheduler] = None,
+        device: str = "cuda",
+        output_dir: str = "runs/train",
+        log_interval: int = 50,
+        eval_interval: int = 1,
+        save_interval: int = 5,
+        max_epochs: int = 50,
+        grad_clip: Optional[float] = None,
+        amp: bool = True,
+        train_metric_samples: int = 0,
+        early_stop_patience: int = 0,
+        early_stop_min_delta: float = 0.0,
+        early_stop_metric: str = "mAP",
+        stage1_epochs: int = 30,
+        stage2_epochs: int = 10,
+        stage2_loader: Optional[DataLoader] = None,
+        reinit_classifier: bool = False,
+        classifier_lr_mult: float = 1.0,
+    ):
+        """Initialize DecoupledTrainer.
+
+        Args:
+            stage1_epochs: Number of epochs for stage 1 (representation learning).
+            stage2_epochs: Number of epochs for stage 2 (classifier retraining).
+            stage2_loader: DataLoader for stage 2 (class-balanced sampling).
+                          If None, uses train_loader.
+            reinit_classifier: Whether to reinitialize classifier before stage 2.
+            classifier_lr_mult: Learning rate multiplier for classifier in stage 2.
+        """
+        total_epochs = stage1_epochs + stage2_epochs
+        super().__init__(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+            output_dir=output_dir,
+            log_interval=log_interval,
+            eval_interval=eval_interval,
+            save_interval=save_interval,
+            max_epochs=total_epochs,
+            grad_clip=grad_clip,
+            amp=amp,
+            train_metric_samples=train_metric_samples,
+            early_stop_patience=early_stop_patience,
+            early_stop_min_delta=early_stop_min_delta,
+            early_stop_metric=early_stop_metric,
+        )
+        self.stage1_epochs = stage1_epochs
+        self.stage2_epochs = stage2_epochs
+        self.stage2_loader = stage2_loader
+        self.reinit_classifier = reinit_classifier
+        self.classifier_lr_mult = classifier_lr_mult
+        self._stage = 1
+        self._original_train_loader = train_loader
+
+    def train(self) -> Dict[str, float]:
+        """Run decoupled training."""
+        # Stage 1: Representation learning
+        self.logger.info("Stage 1: Representation learning")
+        print(f"=== Stage 1: Representation learning ({self.stage1_epochs} epochs) ===")
+
+        for epoch in range(self.current_epoch, self.stage1_epochs):
+            self.current_epoch = epoch
+            self._stage = 1
+            self._run_epoch()
+
+        # Transition to Stage 2
+        self._transition_to_stage2()
+
+        # Stage 2: Classifier retraining
+        self.logger.info("Stage 2: Classifier retraining")
+        print(f"=== Stage 2: Classifier retraining ({self.stage2_epochs} epochs) ===")
+
+        for epoch in range(self.stage1_epochs, self.stage1_epochs + self.stage2_epochs):
+            self.current_epoch = epoch
+            self._stage = 2
+            self._run_epoch()
+
+        summary = {"best_mAP": self.best_metric}
+        if self._last_train_map50 is not None:
+            summary["last_train_mAP_50"] = self._last_train_map50
+        return summary
+
+    def _run_epoch(self) -> None:
+        """Run a single epoch with logging and evaluation."""
+        train_metrics = self._train_epoch()
+        history: Dict[str, float | int | str] = {
+            "epoch": self.current_epoch + 1,
+            "stage": self._stage,
+        }
+        history.update(_filter_scalar_metrics(train_metrics, prefix="train_"))
+
+        if self.train_metric_samples > 0:
+            self._last_train_map50 = self._compute_train_map50()
+            if self._last_train_map50 is not None:
+                print(f"Train mAP50 (subset): {self._last_train_map50:.3f}")
+                train_metrics["train_mAP_50"] = self._last_train_map50
+                history["train_mAP_50"] = self._last_train_map50
+
+        if self.val_loader is not None and (self.current_epoch + 1) % self.eval_interval == 0:
+            val_metrics = self._evaluate()
+            current_metric = float(val_metrics.get(self.early_stop_metric, 0.0))
+            if current_metric > self.best_metric + self.early_stop_min_delta:
+                self.best_metric = current_metric
+                self._save_checkpoint("best.pth")
+                self._early_stop_counter = 0
+            else:
+                if self.early_stop_patience > 0:
+                    self._early_stop_counter += 1
+            history.update(_filter_scalar_metrics(val_metrics, prefix="val_"))
+            history["per_class_AP"] = val_metrics.get("per_class_AP", {})
+            history["per_class_AP50"] = val_metrics.get("per_class_AP50", {})
+            history["per_class_AR"] = val_metrics.get("per_class_AR", {})
+            history["per_class_AR50"] = val_metrics.get("per_class_AR50", {})
+
+        if (self.current_epoch + 1) % self.save_interval == 0:
+            self._save_checkpoint(f"epoch_{self.current_epoch + 1}.pth")
+
+        if self.scheduler is not None:
+            self.scheduler.step()
+
+        history["best_mAP"] = self.best_metric
+        history["timestamp"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        self._append_metrics_history(history)
+
+    def _transition_to_stage2(self) -> None:
+        """Transition from stage 1 to stage 2."""
+        print("Transitioning to Stage 2...")
+
+        # Freeze backbone
+        self._freeze_backbone()
+
+        # Switch to stage 2 data loader if provided
+        if self.stage2_loader is not None:
+            self.train_loader = self.stage2_loader
+
+        # Reinitialize classifier if requested
+        if self.reinit_classifier:
+            self._reinit_classifier_weights()
+
+        # Adjust optimizer for stage 2
+        self._adjust_optimizer_for_stage2()
+
+        # Save stage 1 checkpoint
+        self._save_checkpoint("stage1_final.pth")
+
+    def _freeze_backbone(self) -> None:
+        """Freeze backbone parameters."""
+        frozen_count = 0
+        trainable_count = 0
+        for name, param in self.model.named_parameters():
+            # Freeze everything except classifier/head layers
+            if not self._is_classifier_param(name):
+                param.requires_grad = False
+                frozen_count += 1
+            else:
+                trainable_count += 1
+
+        # If no classifier params found, keep all params trainable
+        if trainable_count == 0:
+            print("Warning: No classifier parameters found, keeping all params trainable")
+            for param in self.model.parameters():
+                param.requires_grad = True
+            return
+
+        trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in self.model.parameters())
+        print(f"Frozen {frozen_count} parameter groups")
+        print(f"Trainable parameters: {trainable:,} / {total:,}")
+
+    def _is_classifier_param(self, name: str) -> bool:
+        """Check if parameter belongs to classifier."""
+        classifier_keywords = [
+            "head", "classifier", "fc", "cls", "box_predictor",
+            "rpn_head", "roi_heads", "class_logits", "bbox_pred"
+        ]
+        name_lower = name.lower()
+        return any(kw in name_lower for kw in classifier_keywords)
+
+    def _reinit_classifier_weights(self) -> None:
+        """Reinitialize classifier weights."""
+        for name, module in self.model.named_modules():
+            if self._is_classifier_param(name):
+                if hasattr(module, "reset_parameters"):
+                    module.reset_parameters()
+                    print(f"Reinitialized: {name}")
+
+    def _adjust_optimizer_for_stage2(self) -> None:
+        """Adjust optimizer learning rates for stage 2."""
+        if self.classifier_lr_mult == 1.0:
+            return
+
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] *= self.classifier_lr_mult

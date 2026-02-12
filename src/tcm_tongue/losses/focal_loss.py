@@ -97,3 +97,100 @@ def _reduce(loss: torch.Tensor, reduction: str) -> torch.Tensor:
     if reduction == "none":
         return loss
     raise ValueError(f"Unsupported reduction: {reduction}")
+
+
+class ClassBalancedFocalLoss(nn.Module):
+    """Class-Balanced Focal Loss based on effective number of samples.
+
+    Reference: CVPR 2019 "Class-Balanced Loss Based on Effective Number of Samples"
+
+    The effective number of samples is computed as:
+        E_n = (1 - beta^n) / (1 - beta)
+    where n is the number of samples for each class.
+
+    The class weight is then:
+        w = 1 / E_n = (1 - beta) / (1 - beta^n)
+    """
+
+    def __init__(
+        self,
+        class_counts: Sequence[int],
+        beta: float = 0.9999,
+        gamma: float = 2.0,
+        reduction: str = "mean",
+        ignore_index: Optional[int] = None,
+    ):
+        """Initialize ClassBalancedFocalLoss.
+
+        Args:
+            class_counts: Number of samples for each class.
+            beta: Hyperparameter for effective number calculation.
+                  Higher beta gives more weight to rare classes.
+                  Typical values: 0.9, 0.99, 0.999, 0.9999
+            gamma: Focal loss focusing parameter.
+            reduction: Reduction method ('mean', 'sum', 'none').
+            ignore_index: Target value to ignore.
+        """
+        super().__init__()
+        self.gamma = gamma
+        self.reduction = reduction
+        self.ignore_index = ignore_index
+        self.beta = beta
+
+        # Compute class-balanced weights
+        weights = self._compute_cb_weights(class_counts, beta)
+        self.register_buffer("class_weights", weights)
+
+    def _compute_cb_weights(
+        self, class_counts: Sequence[int], beta: float
+    ) -> torch.Tensor:
+        """Compute class-balanced weights based on effective number of samples."""
+        counts = torch.tensor(class_counts, dtype=torch.float32)
+        # Avoid division by zero for classes with no samples
+        counts = torch.clamp(counts, min=1.0)
+
+        # Effective number: E_n = (1 - beta^n) / (1 - beta)
+        effective_num = 1.0 - torch.pow(beta, counts)
+
+        # Weight: w = (1 - beta) / E_n
+        weights = (1.0 - beta) / effective_num
+
+        # Normalize weights to sum to num_classes
+        weights = weights / weights.sum() * len(weights)
+
+        return weights
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        if logits.dim() < 2:
+            raise ValueError("Logits must have shape (N, C, ...) for focal loss")
+
+        num_classes = logits.size(1)
+        logits_flat, targets_flat = _flatten_logits_targets(logits, targets)
+
+        if self.ignore_index is not None:
+            valid_mask = targets_flat != self.ignore_index
+            logits_flat = logits_flat[valid_mask]
+            targets_flat = targets_flat[valid_mask]
+
+        if targets_flat.numel() == 0:
+            return logits_flat.sum() * 0.0
+
+        log_probs = F.log_softmax(logits_flat, dim=1)
+        log_pt = log_probs.gather(1, targets_flat.unsqueeze(1)).squeeze(1)
+        pt = log_pt.exp()
+
+        # Focal factor
+        focal_factor = (1.0 - pt) ** self.gamma
+        loss = -focal_factor * log_pt
+
+        # Apply class-balanced weights
+        weights = self.class_weights.to(logits_flat.device)
+        if weights.numel() != num_classes:
+            raise ValueError(
+                f"Number of class weights ({weights.numel()}) must match "
+                f"number of classes ({num_classes})"
+            )
+        alpha_factor = weights[targets_flat]
+        loss = loss * alpha_factor
+
+        return _reduce(loss, self.reduction)

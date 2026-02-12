@@ -1,0 +1,14 @@
+experiment:
+  name: "class_aware"
+  description: "Class-Aware Sampling strategy"
+
+_base_: "baseline.yaml"
+
+sampler:
+  type: "class_aware"
+  num_samples_per_class: 4
+
+loss:
+  type: "focal"
+  focal_alpha: 0.25
+  focal_gamma: 2.0

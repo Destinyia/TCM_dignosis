@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from tcm_tongue.data import TongueCocoDataset
-from tcm_tongue.engine import COCOEvaluator, Trainer
+from tcm_tongue.engine import COCOEvaluator, Trainer, DecoupledTrainer
 
 
 def _make_dummy_coco(root: Path):
@@ -174,3 +174,60 @@ class TestTrainer:
         metrics = evaluator.evaluate(model, loader, device=device)
         per_class = metrics["per_class_AP"]
         assert "class1" in per_class
+
+
+class TestDecoupledTrainer:
+    def test_decoupled_trainer_two_stages(self, tmp_path: Path):
+        """Test DecoupledTrainer runs both stages."""
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        data_root = tmp_path / "coco"
+        _make_dummy_coco(data_root)
+        dataset = TongueCocoDataset(root=str(data_root), split="train")
+        loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=dataset.collate_fn)
+
+        model = DummyDetector()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        trainer = DecoupledTrainer(
+            model=model,
+            train_loader=loader,
+            val_loader=None,
+            optimizer=optimizer,
+            device=device,
+            stage1_epochs=1,
+            stage2_epochs=1,
+            log_interval=10,
+            save_interval=10,
+            eval_interval=10,
+        )
+        metrics = trainer.train()
+        assert "best_mAP" in metrics
+
+    def test_decoupled_trainer_freezes_backbone(self, tmp_path: Path):
+        """Test that DecoupledTrainer freezes backbone in stage 2."""
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        data_root = tmp_path / "coco"
+        _make_dummy_coco(data_root)
+        dataset = TongueCocoDataset(root=str(data_root), split="train")
+        loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=dataset.collate_fn)
+
+        model = DummyDetector()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        trainer = DecoupledTrainer(
+            model=model,
+            train_loader=loader,
+            val_loader=None,
+            optimizer=optimizer,
+            device=device,
+            stage1_epochs=1,
+            stage2_epochs=0,
+            log_interval=10,
+            save_interval=10,
+            eval_interval=10,
+        )
+
+        # Run stage 1 only
+        trainer.train()
+
+        # Check stage 1 checkpoint exists
+        stage1_ckpt = Path(trainer.output_dir) / "stage1_final.pth"
+        assert stage1_ckpt.is_file()

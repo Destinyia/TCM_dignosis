@@ -1,0 +1,18 @@
+experiment:
+  name: "decoupled"
+  description: "Decoupled training with two-stage learning"
+
+_base_: "baseline.yaml"
+
+decoupled:
+  enabled: true
+  stage1_epochs: 30
+  stage2_epochs: 10
+  stage2_sampler: "class_aware"
+  reinit_classifier: false
+  classifier_lr_mult: 1.0
+
+loss:
+  type: "focal"
+  focal_alpha: 0.25
+  focal_gamma: 2.0

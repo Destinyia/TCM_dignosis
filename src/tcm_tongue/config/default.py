@@ -46,16 +46,33 @@ class TrainConfig:
 
 @dataclass
 class LossConfig:
-    type: str = "focal"  # ce, weighted_ce, focal
+    type: str = "focal"  # ce, weighted_ce, focal, cb_focal, seesaw
     focal_alpha: float = 0.25
     focal_gamma: float = 2.0
     class_weights: Optional[List[float]] = None
+    # Class-balanced focal loss params
+    cb_beta: float = 0.9999
+    # Seesaw loss params
+    seesaw_p: float = 0.8
+    seesaw_q: float = 2.0
 
 
 @dataclass
 class SamplerConfig:
-    type: str = "default"  # default, oversample, undersample, stratified
+    type: str = "default"  # default, oversample, undersample, stratified, class_aware
     oversample_factor: float = 2.0
+    # Class-aware sampler params
+    num_samples_per_class: int = 4
+
+
+@dataclass
+class DecoupledConfig:
+    enabled: bool = False
+    stage1_epochs: int = 30
+    stage2_epochs: int = 10
+    stage2_sampler: str = "class_aware"
+    reinit_classifier: bool = False
+    classifier_lr_mult: float = 1.0
 
 
 @dataclass
@@ -80,6 +97,7 @@ class Config:
     loss: LossConfig = field(default_factory=LossConfig)
     sampler: SamplerConfig = field(default_factory=SamplerConfig)
     augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
+    decoupled: DecoupledConfig = field(default_factory=DecoupledConfig)
 
     @classmethod
     def from_yaml(cls, path: str) -> "Config":
@@ -107,6 +125,7 @@ class Config:
             loss=_load_section(LossConfig, merged.get("loss", {})),
             sampler=_load_section(SamplerConfig, merged.get("sampler", {})),
             augmentation=_load_section(AugmentationConfig, merged.get("augmentation", {})),
+            decoupled=_load_section(DecoupledConfig, merged.get("decoupled", {})),
         )
 
     def to_yaml(self, path: str) -> None:
@@ -119,6 +138,7 @@ class Config:
             "loss": asdict(self.loss),
             "sampler": asdict(self.sampler),
             "augmentation": asdict(self.augmentation),
+            "decoupled": asdict(self.decoupled),
         }
         path_obj.parent.mkdir(parents=True, exist_ok=True)
         with path_obj.open("w", encoding="utf-8") as f:

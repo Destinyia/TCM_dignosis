@@ -180,9 +180,9 @@ def _print_env_config(cfg: Config, args: argparse.Namespace, device: str) -> Non
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/experiments/augment_test.yaml")
+    parser.add_argument("--config", default="configs/experiments/baseline.yaml")
     timestamp=datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    parser.add_argument("--output-dir", default=f"runs/experiments/augment_test_4000_{timestamp}")
+    parser.add_argument("--output-dir", default=f"runs/experiments/baseline_8cls_4000_{timestamp}")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=4)
@@ -225,6 +225,15 @@ def main():
     val_loader = build_dataloader(
         cfg, cfg.data.val_split, train=False, subset_size=args.val_size, seed=args.seed
     )
+
+    # Auto-adjust num_classes based on actual dataset categories (supports class_filter)
+    base_dataset = train_loader.dataset
+    if isinstance(base_dataset, Subset):
+        base_dataset = base_dataset.dataset
+    actual_num_classes = len(base_dataset.category_ids) + cfg.data.label_offset
+    if cfg.model.num_classes != actual_num_classes:
+        print(f"[INFO] Auto-adjusting model.num_classes: {cfg.model.num_classes} -> {actual_num_classes}")
+        cfg.model.num_classes = actual_num_classes
 
     model = build_detector(cfg)
     optimizer = build_optimizer(cfg, model)

@@ -1,6 +1,12 @@
 from .dataset import TongueCocoDataset
 from .transforms import BaseTransform, TrainTransform, ValTransform, TonguePriorAugment
-from .sampler import ClassBalancedSampler, StratifiedSampler, UnderSampler, create_sampler
+from .sampler import (
+    ClassBalancedSampler,
+    StratifiedSampler,
+    UnderSampler,
+    ClassAwareSampler,
+    create_sampler,
+)
 
 __all__ = [
     "TongueCocoDataset",
@@ -11,5 +17,6 @@ __all__ = [
     "ClassBalancedSampler",
     "StratifiedSampler",
     "UnderSampler",
+    "ClassAwareSampler",
     "create_sampler",
 ]

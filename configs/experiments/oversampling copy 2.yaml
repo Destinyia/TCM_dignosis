@@ -1,0 +1,9 @@
+experiment:
+  name: "oversampling"
+  description: "Oversampling experiment"
+
+_base_: "baseline.yaml"
+
+sampler:
+  type: "oversample"
+  oversample_factor: 2.0

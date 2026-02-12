@@ -8,6 +8,7 @@ from tcm_tongue.data import (
     StratifiedSampler,
     TongueCocoDataset,
     UnderSampler,
+    ClassAwareSampler,
 )
 
 
@@ -87,3 +88,34 @@ class TestSamplers:
         if not head_weights or not tail_weights:
             pytest.skip("no head/tail weights")
         assert np.mean(head_weights) < np.mean(tail_weights)
+
+    def test_class_aware_sampler_basic(self, dataset):
+        """Test ClassAwareSampler creates valid indices."""
+        sampler = ClassAwareSampler(dataset, num_samples_per_class=2)
+        indices = list(iter(sampler))
+
+        assert len(indices) > 0
+        assert all(0 <= idx < len(dataset) for idx in indices)
+
+    def test_class_aware_sampler_class_coverage(self, dataset):
+        """Test ClassAwareSampler covers multiple classes."""
+        sampler = ClassAwareSampler(dataset, num_samples_per_class=4)
+        indices = list(iter(sampler))
+
+        # Collect labels from sampled images
+        sampled_labels = set()
+        for idx in indices:
+            labels = _image_labels(dataset, idx)
+            sampled_labels.update(labels)
+
+        # Should cover multiple classes
+        assert len(sampled_labels) >= 2
+
+    def test_class_aware_sampler_length(self, dataset):
+        """Test ClassAwareSampler length calculation."""
+        num_samples = 3
+        sampler = ClassAwareSampler(dataset, num_samples_per_class=num_samples)
+
+        num_classes = len(sampler._classes)
+        expected_len = num_classes * num_samples
+        assert len(sampler) == expected_len

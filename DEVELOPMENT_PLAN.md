@@ -2242,6 +2242,136 @@ conda run -n cv python scripts/analyze_experiments.py --output-dir runs/experime
 1. 按阶段顺序执行任务
 2. 每个模块开发前先编写单元测试 (TDD)
 3. 遇到问题及时更新 codex.MD
-4. 每日更新 claude.MD 开发日志
+4. 每日更新开发日志（本文件末尾）
 5. 使用 `conda activate cv` 环境运行所有命令
 6. 所有实验使用相同的随机种子 (42) 保证可复现性
+
+---
+
+## 开发日志
+
+### 2026-02-04: shezhenv3-coco 数据集分析
+
+**运行命令**: `conda run -n cv python analyze_shezhenv3_coco.py`
+
+**数据集概述**:
+
+| 分割 | 图像数量 | 标注数量 |
+|------|----------|----------|
+| train | 5594 | 14677 |
+| val | 572 | 1874 |
+| test | 553 | 1672 |
+| **总计** | **6719** | **18223** |
+
+**类别分布（21个类别）**:
+
+| 类别名称 | 总数 | 中文含义 |
+|----------|------|----------|
+| baitaishe | 5040 | 白苔舌 |
+| hongdianshe | 3653 | 红点舌 |
+| liewenshe | 1886 | 裂纹舌 |
+| chihenshe | 1482 | 齿痕舌 |
+| hongshe | 1466 | 红舌 |
+| huangtaishe | 1119 | 黄苔舌 |
+| pangdashe | 689 | 胖大舌 |
+| botaishe | 581 | 薄苔舌 |
+| shenquao | 495 | 肾区凹 |
+| xinfeiao | 372 | 心肺凹 |
+| gandanao | 292 | 肝胆凹 |
+| shoushe | 285 | 瘦舌 |
+| huataishe | 283 | 滑苔舌 |
+| zishe | 231 | 紫舌 |
+| piweiao | 186 | 脾胃凹 |
+| heitaishe | 122 | 黑苔舌 |
+| jiankangshe | 21 | 健康舌 |
+| gandantu | 9 | 肝胆凸 |
+| unknown_21 | 7 | 未知类别 |
+| shenqutu | 2 | 肾区凸 |
+| xinfeitu | 2 | 心肺凸 |
+
+**类别不平衡问题**:
+- 头部类别: baitaishe(5040), hongdianshe(3653) 占总标注的 47.7%
+- 尾部类别: xinfeitu(2), shenqutu(2), gandantu(9) 样本极少
+- 最大/最小比例: 5040:2 = 2520:1
+
+**生成的可视化文件**: `runs/shezhenv3_coco_analysis_2026-02-04/`
+
+### 2026-02-04: 开发规划制定
+
+- 生成 `DEVELOPMENT_PLAN.md`
+- 规划 17 天开发周期
+
+### 2026-02-04: 模块实现
+
+- 新增项目结构 `src/tcm_tongue/` 与基础包初始化
+- 添加 `requirements.txt` 与 `setup.py`
+- 实现配置系统 `Config` 并补充单元测试
+- 实现 COCO 数据集模块、数据增强与采样器模块及相应测试
+- 实现模型层基础：Backbone、Neck、Head、Detector
+- 添加 backbone/detector 单元测试
+- 实现损失函数模块：FocalLoss、WeightedCrossEntropyLoss
+- 添加损失函数单元测试
+- 实现训练器与评估器（COCOEvaluator、Trainer）
+- 添加训练/评估单元测试
+- 实现推理接口 TongueDetectorInference
+- 添加推理接口单元测试
+- 添加实验配置与脚本（configs/experiments、scripts/run_experiments.py、scripts/analyze_experiments.py）
+- 添加基础训练脚本 scripts/train.py
+
+### 2026-02-04: Bug 修复
+
+- PadIfNeeded 参数更新为 fill（避免 albumentations 警告）
+- 在 tests/conftest.py 设置 NO_ALBUMENTATIONS_UPDATE 以静默版本检查警告
+- 修复 COCOEvaluator per-class AP 统计对 numpy 数组使用 numel 的错误
+- 训练/评估测试改为优先使用 CUDA（可用时），否则回退 CPU
+- 使用 torch.amp GradScaler/autocast 替代 torch.cuda.amp，消除 FutureWarning
+- 修复 scripts/train.py 运行时无法导入 tcm_tongue（补充 src 路径）
+- 修复 scripts/train.py 中 _print_env_config 定义顺序导致的 NameError
+- 数据集读取时对 COCO bbox 做边界裁剪，避免 Albumentations 报 y_max 超界
+- 允许 PIL 读取截断图片（ImageFile.LOAD_TRUNCATED_IMAGES）
+
+### 2026-02-06: Baseline 不收敛问题诊断与修复
+
+**问题**: 50 epochs 后 mAP 仅 0.12%
+
+**根因**:
+
+| 问题 | 位置 | 影响 |
+|------|------|------|
+| 未使用预训练权重 | `head.py:49-53` | 从头训练极难收敛 |
+| num_classes 未含背景类 | 配置 21，应为 22 | 分类头维度错误 |
+| 学习率过高 | SGD lr=0.001 | 训练不稳定 |
+
+**修复**:
+- Faster R-CNN 使用预训练权重并替换分类头
+- model.num_classes = 22
+- label_offset = 1（训练时 +1，评估/推理时回映射）
+
+### 2026-02-06: 训练管道修复
+
+- Normalize 修复（仅缩放到 [0,1]，避免与模型内部归一重复）
+- Resize/Padding 修复（交给模型内部处理，避免预测框坐标与原图不一致）
+- COCOEvaluator 支持 Subset（按子集 image_id 过滤 GT 与预测）
+- 预训练权重哈希不匹配时自动清理缓存并重试下载
+- 训练日志增强（显存显示、train mAP50）
+- COCOEval 输出精简为表格
+- 追加 `metrics_history.jsonl`，用于分析过拟合趋势
+- Albumentations 在关闭 resize 时加入空操作以消除 bbox 警告
+- 默认检测头切换为 Faster R-CNN v2
+- 配置新增 `data.image_size`，默认 `[800, 800]`
+
+### 2026-02-06: 开发计划调整
+
+新增阶段: Baseline 修复（插入在阶段 8 之前）
+
+**快速迭代参数**:
+- 训练样本: 200 张
+- 验证样本: 50 张
+- Epochs: 5-10
+- Batch size: 4
+- 学习率: 0.0001 (AdamW)
+
+### 2026-02-08-09: 实验对比
+
+- 完成 class_balanced_focal、strong_augment 等实验
+- 最优配置：class_balanced_focal (mAP=0.1909)

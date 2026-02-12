@@ -1,0 +1,52 @@
+# Stratified sampler + ce loss
+
+experiment:
+  name: "samp_stratified"
+  description: "Stratified sampler with aug_all augmentation"
+
+data:
+  root: "datasets/shezhenv3-coco"
+  batch_size: 4
+  num_workers: 2
+  label_offset: 1
+  normalize: false
+  resize_in_dataset: false
+  image_size: [800, 800]
+  class_filter:
+    - baitaishe
+    - hongdianshe
+    - liewenshe
+    - chihenshe
+    - hongshe
+    - huangtaishe
+    - pangdashe
+    - botaishe
+
+model:
+  backbone: "resnet50"
+  pretrained: true
+  neck: "fpn"
+  head: "faster_rcnn_v2"
+
+train:
+  epochs: 30
+  lr: 0.001
+  weight_decay: 0.0001
+  lr_scheduler: "warmup_cosine"
+  warmup_epochs: 3
+  early_stop_patience: 10
+  early_stop_min_delta: 0.001
+  early_stop_metric: "mAP"
+
+loss:
+  type: "ce"
+
+sampler:
+  type: "stratified"
+
+augmentation:
+  type: "strong"
+  horizontal_flip: true
+  brightness_contrast: true
+  hue_saturation: true
+  gauss_noise: true

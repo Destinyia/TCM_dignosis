@@ -1,0 +1,14 @@
+experiment:
+  name: "combined_v2"
+  description: "Combined strategy: CB Focal + Class-Aware Sampling"
+
+_base_: "baseline.yaml"
+
+loss:
+  type: "cb_focal"
+  focal_gamma: 2.0
+  cb_beta: 0.9999
+
+sampler:
+  type: "class_aware"
+  num_samples_per_class: 4

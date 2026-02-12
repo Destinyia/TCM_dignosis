@@ -55,7 +55,7 @@ class TrainTransform(BaseTransform):
         brightness_contrast: bool = True,
         hue_saturation: bool = True,
         gauss_noise: bool = True,
-        strong: bool = False,
+        strong: bool = True,
         tcm_prior: bool = False,
         tcm_prior_prob: float = 0.3,
     ):
@@ -96,9 +96,9 @@ class TrainTransform(BaseTransform):
             ops.extend(
                 [
                     A.Affine(
-                        translate_percent=0.05,
-                        scale=(0.8, 1.2),
-                        rotate=(-10, 10),
+                        translate_percent=0.1,
+                        scale=(0.66, 1.5),
+                        rotate=(-15, 15),
                         border_mode=0,
                         fill=(114, 114, 114),
                         p=0.3,
