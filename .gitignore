@@ -25,6 +25,11 @@ logs/
 *.log
 *.jsonl
 
+# Tongue_segment specific
+Tongue_segment/data/
+Tongue_segment/runs/
+Tongue_segment/weights/
+
 # OS
 .DS_Store
 Thumbs.db
