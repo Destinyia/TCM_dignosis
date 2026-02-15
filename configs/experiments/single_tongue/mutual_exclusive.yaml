@@ -1,0 +1,10 @@
+# 方案2: Softmax互斥分类头
+_base_: "./baseline.yaml"
+
+experiment:
+  name: "mutual_exclusive"
+  description: "Mutual exclusive classifier with temperature scaling"
+
+model:
+  classifier_type: "mutual_exclusive"
+  classifier_temperature: 0.5

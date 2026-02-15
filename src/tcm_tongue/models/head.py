@@ -6,6 +6,7 @@ import os
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 try:
     from torchvision.models.detection import (
@@ -27,6 +28,57 @@ try:
         FasterRCNN_ResNet50_FPN_V2_Weights = None
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("torchvision is required for detection heads") from exc
+
+
+class MutualExclusivePredictor(nn.Module):
+    """互斥分类预测头，使用温度缩放增强分类互斥性"""
+
+    def __init__(self, in_features: int, num_classes: int, temperature: float = 1.0):
+        super().__init__()
+        self.cls_score = nn.Linear(in_features, num_classes)
+        self.bbox_pred = nn.Linear(in_features, num_classes * 4)
+        self.temperature = temperature
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        if x.dim() == 4:
+            x = x.flatten(start_dim=1)
+        scores = self.cls_score(x) / self.temperature
+        bbox_deltas = self.bbox_pred(x)
+        return scores, bbox_deltas
+
+
+class GlobalClassifier(nn.Module):
+    """图像级全局分类头"""
+
+    def __init__(self, in_channels: int = 2048, num_classes: int = 8):
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(in_channels, 512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(512, num_classes),
+        )
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        x = self.pool(features).flatten(1)
+        return self.fc(x)
+
+
+class TongueClassifier(nn.Module):
+    """舌象8分类器（用于两阶段解耦的Stage 2）"""
+
+    def __init__(self, in_features: int = 1024, num_classes: int = 8):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(in_features, 512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(512, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.fc(x.flatten(1))
 
 
 class DetectionHead(nn.Module):
@@ -57,6 +109,8 @@ class FasterRCNNHead(DetectionHead):
         num_classes: int,
         in_channels: int = 256,
         pretrained: bool = True,
+        classifier_type: str = "default",
+        classifier_temperature: float = 1.0,
         **kwargs,
     ):
         super().__init__(num_classes, in_channels)
@@ -67,7 +121,13 @@ class FasterRCNNHead(DetectionHead):
             weights,
         )
         in_features = self.model.roi_heads.box_predictor.cls_score.in_features
-        self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+
+        if classifier_type == "mutual_exclusive":
+            self.model.roi_heads.box_predictor = MutualExclusivePredictor(
+                in_features, num_classes, temperature=classifier_temperature
+            )
+        else:
+            self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 
     def forward(
         self,
@@ -91,6 +151,8 @@ class FasterRCNNV2Head(DetectionHead):
         num_classes: int,
         in_channels: int = 256,
         pretrained: bool = True,
+        classifier_type: str = "default",
+        classifier_temperature: float = 1.0,
         **kwargs,
     ):
         super().__init__(num_classes, in_channels)
@@ -103,7 +165,13 @@ class FasterRCNNV2Head(DetectionHead):
             weights,
         )
         in_features = self.model.roi_heads.box_predictor.cls_score.in_features
-        self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+
+        if classifier_type == "mutual_exclusive":
+            self.model.roi_heads.box_predictor = MutualExclusivePredictor(
+                in_features, num_classes, temperature=classifier_temperature
+            )
+        else:
+            self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
 
     def forward(
         self,
@@ -191,6 +259,8 @@ def create_head(
     name: str,
     num_classes: int,
     in_channels: int = 256,
+    classifier_type: str = "default",
+    classifier_temperature: float = 1.0,
     **kwargs,
 ) -> DetectionHead:
     """Detection head factory."""
@@ -202,6 +272,13 @@ def create_head(
     }
     if name not in heads:
         raise ValueError(f"Unknown head: {name}")
+    if name in ("faster_rcnn_v2", "faster_rcnn"):
+        return heads[name](
+            num_classes, in_channels,
+            classifier_type=classifier_type,
+            classifier_temperature=classifier_temperature,
+            **kwargs
+        )
     return heads[name](num_classes, in_channels, **kwargs)
 
 

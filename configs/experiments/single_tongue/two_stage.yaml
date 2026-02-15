@@ -1,0 +1,17 @@
+# 方案3: 两阶段解耦设计
+_base_: "./baseline.yaml"
+
+experiment:
+  name: "two_stage"
+  description: "Two-stage decoupled: localization + classification"
+
+two_stage:
+  enabled: true
+  stage1_epochs: 20
+  stage2_epochs: 10
+  stage1_num_classes: 2
+  stage2_num_classes: 8
+  freeze_localizer_in_stage2: true
+
+train:
+  epochs: 30

@@ -30,6 +30,8 @@ class ModelConfig:
     neck: str = "fpn"  # fpn, bifpn, panet
     head: str = "faster_rcnn_v2"  # faster_rcnn, faster_rcnn_v2, fcos, retinanet
     num_classes: int = 22
+    classifier_type: str = "default"  # default, mutual_exclusive
+    classifier_temperature: float = 1.0  # 温度缩放（用于互斥分类）
 
 
 @dataclass
@@ -90,6 +92,45 @@ class AugmentationConfig:
 
 
 @dataclass
+class PostprocessConfig:
+    """后处理配置"""
+    score_thresh: float = 0.5
+    nms_thresh: float = 0.5
+    top_k: int = 0  # 0=不限制, 1=Top-1 (单目标约束)
+
+
+@dataclass
+class TwoStageConfig:
+    """两阶段解耦配置"""
+    enabled: bool = False
+    stage1_epochs: int = 20  # 定位阶段
+    stage2_epochs: int = 10  # 分类阶段
+    stage1_num_classes: int = 2  # 背景 + 舌头
+    stage2_num_classes: int = 8  # 8类舌象
+    freeze_localizer_in_stage2: bool = True
+    roi_size: int = 7
+
+
+@dataclass
+class GlobalClassifierConfig:
+    """全局分类分支配置"""
+    enabled: bool = False
+    fusion_weight: float = 0.5  # 检测分类与全局分类的融合权重
+    global_loss_weight: float = 1.0
+    consistency_loss_weight: float = 0.1
+
+
+@dataclass
+class SingleTargetConfig:
+    """单目标约束配置"""
+    enabled: bool = False
+    loss_weight: float = 0.1
+    target_count: int = 1
+    use_entropy_loss: bool = True
+    use_margin_loss: bool = True
+
+
+@dataclass
 class Config:
     data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
@@ -98,6 +139,10 @@ class Config:
     sampler: SamplerConfig = field(default_factory=SamplerConfig)
     augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
     decoupled: DecoupledConfig = field(default_factory=DecoupledConfig)
+    postprocess: PostprocessConfig = field(default_factory=PostprocessConfig)
+    two_stage: TwoStageConfig = field(default_factory=TwoStageConfig)
+    global_classifier: GlobalClassifierConfig = field(default_factory=GlobalClassifierConfig)
+    single_target: SingleTargetConfig = field(default_factory=SingleTargetConfig)
 
     @classmethod
     def from_yaml(cls, path: str) -> "Config":
@@ -126,6 +171,10 @@ class Config:
             sampler=_load_section(SamplerConfig, merged.get("sampler", {})),
             augmentation=_load_section(AugmentationConfig, merged.get("augmentation", {})),
             decoupled=_load_section(DecoupledConfig, merged.get("decoupled", {})),
+            postprocess=_load_section(PostprocessConfig, merged.get("postprocess", {})),
+            two_stage=_load_section(TwoStageConfig, merged.get("two_stage", {})),
+            global_classifier=_load_section(GlobalClassifierConfig, merged.get("global_classifier", {})),
+            single_target=_load_section(SingleTargetConfig, merged.get("single_target", {})),
         )
 
     def to_yaml(self, path: str) -> None:
@@ -139,6 +188,10 @@ class Config:
             "sampler": asdict(self.sampler),
             "augmentation": asdict(self.augmentation),
             "decoupled": asdict(self.decoupled),
+            "postprocess": asdict(self.postprocess),
+            "two_stage": asdict(self.two_stage),
+            "global_classifier": asdict(self.global_classifier),
+            "single_target": asdict(self.single_target),
         }
         path_obj.parent.mkdir(parents=True, exist_ok=True)
         with path_obj.open("w", encoding="utf-8") as f:

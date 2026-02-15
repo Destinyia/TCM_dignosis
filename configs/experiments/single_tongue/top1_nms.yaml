@@ -1,0 +1,9 @@
+# 方案1: Top-1 NMS后处理
+_base_: "./baseline.yaml"
+
+experiment:
+  name: "top1_nms"
+  description: "Top-1 NMS post-processing for single target"
+
+postprocess:
+  top_k: 1

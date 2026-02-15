@@ -1,0 +1,12 @@
+# 方案4: 全局分类分支
+_base_: "./baseline.yaml"
+
+experiment:
+  name: "global_cls"
+  description: "Global classification branch with consistency loss"
+
+global_classifier:
+  enabled: true
+  fusion_weight: 0.5
+  global_loss_weight: 1.0
+  consistency_loss_weight: 0.1

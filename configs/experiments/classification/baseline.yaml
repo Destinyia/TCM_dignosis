@@ -1,0 +1,30 @@
+# 基线分类实验配置
+# ResNet50 直接分类，不使用分割注意力
+
+data:
+  root: "datasets/shezhenv3-coco"
+  image_size: [640, 640]
+  batch_size: 16
+  num_workers: 4
+
+model:
+  type: "baseline"
+  backbone: "resnet50"
+  num_classes: 13  # 舌头基本类型
+  pretrained: true
+  dropout: 0.5
+
+train:
+  epochs: 50
+  lr: 0.0001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  early_stop_patience: 10
+
+loss:
+  type: "focal"
+  focal_gamma: 2.0
+
+augmentation:
+  strong: false
+  weighted_sampler: false

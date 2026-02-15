@@ -21,8 +21,8 @@ class SeesawLoss(nn.Module):
     def __init__(
         self,
         num_classes: int,
-        p: float = 0.8,
-        q: float = 2.0,
+        p: float = 0.6,
+        q: float = 1.5,
         eps: float = 1e-2,
         reduction: str = "mean",
         ignore_index: Optional[int] = None,

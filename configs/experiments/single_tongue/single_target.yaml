@@ -1,0 +1,16 @@
+# 方案5: 单目标约束损失
+_base_: "./baseline.yaml"
+
+experiment:
+  name: "single_target"
+  description: "Single target constraint loss"
+
+single_target:
+  enabled: true
+  loss_weight: 0.1
+  target_count: 1
+  use_entropy_loss: true
+  use_margin_loss: true
+
+postprocess:
+  top_k: 1

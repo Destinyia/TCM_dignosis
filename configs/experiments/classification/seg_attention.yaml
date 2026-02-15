@@ -1,0 +1,33 @@
+# 分割注意力分类实验配置
+# 使用预训练分割模型生成注意力掩码引导分类
+
+data:
+  root: "datasets/shezhenv3-coco"
+  image_size: [640, 640]
+  batch_size: 16
+  num_workers: 4
+
+model:
+  type: "seg_attention"
+  backbone: "resnet50"
+  num_classes: 13  # 舌头基本类型
+  pretrained: true
+  dropout: 0.5
+  seg_weights: "Tongue_segment/weights/tongue05.pt"
+  freeze_seg: true
+  use_channel_attention: true
+
+train:
+  epochs: 50
+  lr: 0.0001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  early_stop_patience: 10
+
+loss:
+  type: "focal"
+  focal_gamma: 2.0
+
+augmentation:
+  strong: false
+  weighted_sampler: false
