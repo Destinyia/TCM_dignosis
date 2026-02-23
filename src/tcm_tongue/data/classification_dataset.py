@@ -5,7 +5,7 @@ import json
 import os
 import random
 from collections import defaultdict
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -18,6 +18,11 @@ try:
 except ImportError:
     A = None
     ToTensorV2 = None
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 try:
     from pycocotools import mask as mask_utils
@@ -62,6 +67,10 @@ class TongueClassificationDataset(Dataset):
         return_bbox: bool = False,  # 是否返回bbox
         return_mask: bool = False,  # 是否返回mask
         mask_aug: Optional[Callable] = None,  # 分割mask引导的数据增强
+        mask_source: str = "dataset",  # dataset / seg_model
+        mask_seg_weights: Optional[str] = None,
+        mask_seg_device: str = "cpu",
+        mask_seg_threshold: float = 0.5,
     ):
         """
         Args:
@@ -84,6 +93,11 @@ class TongueClassificationDataset(Dataset):
         self.return_bbox = return_bbox
         self.return_mask = return_mask
         self.mask_aug = mask_aug
+        self.mask_source = mask_source
+        self.mask_seg_weights = mask_seg_weights
+        self.mask_seg_device = mask_seg_device
+        self.mask_seg_threshold = mask_seg_threshold
+        self._seg_encoder = None
         self._warned_no_mask = False
 
         # 如果未指定class_filter且use_basic_types为True，使用舌头基本类型
@@ -194,7 +208,10 @@ class TongueClassificationDataset(Dataset):
         bbox = self._get_bbox(anns, orig_h, orig_w)
         mask = None
         if self.return_mask or self.mask_aug is not None:
-            mask = self._get_segmentation_mask(anns, orig_h, orig_w, image_info["file_name"])
+            if self.mask_source == "seg_model":
+                mask = self._get_segmentation_mask_from_model(image_np)
+            else:
+                mask = self._get_segmentation_mask(anns, orig_h, orig_w, image_info["file_name"])
             if self.mask_aug is not None:
                 image_np, mask = self.mask_aug(image_np, mask)
 
@@ -224,6 +241,45 @@ class TongueClassificationDataset(Dataset):
         if self.return_mask:
             return image_tensor, label, mask_tensor
         return image_tensor, label
+
+    def _get_segmentation_mask_from_model(self, image_np: np.ndarray) -> np.ndarray:
+        if cv2 is None:
+            raise ImportError("opencv-python is required for mask_source=seg_model")
+        if self._seg_encoder is None:
+            if not self.mask_seg_weights:
+                raise RuntimeError("mask_seg_weights is required when mask_source=seg_model")
+            if not os.path.exists(self.mask_seg_weights):
+                raise FileNotFoundError(f"Seg weights not found: {self.mask_seg_weights}")
+            from tcm_tongue.models.seg_attention import SegmentationEncoder
+            self._seg_encoder = SegmentationEncoder(weights_path=self.mask_seg_weights, freeze=True)
+            self._seg_encoder = self._seg_encoder.to(self.mask_seg_device)
+            self._seg_encoder.eval()
+
+        h, w = image_np.shape[:2]
+        pad_h = (32 - (h % 32)) % 32
+        pad_w = (32 - (w % 32)) % 32
+        if pad_h > 0 or pad_w > 0:
+            image_np = cv2.copyMakeBorder(
+                image_np,
+                0,
+                pad_h,
+                0,
+                pad_w,
+                borderType=cv2.BORDER_CONSTANT,
+                value=(0, 0, 0),
+            )
+        img_t = torch.from_numpy(image_np).permute(2, 0, 1).float() / 255.0
+        img_t = img_t.unsqueeze(0).to(self.mask_seg_device)
+        with torch.no_grad():
+            pred = self._seg_encoder(img_t)
+        pred = pred.squeeze(0).squeeze(0).cpu().numpy()
+        pred = np.clip(pred, 0.0, 1.0)
+        ph, pw = pred.shape[:2]
+        if ph != h + pad_h or pw != w + pad_w:
+            pred = cv2.resize(pred, (w + pad_w, h + pad_h), interpolation=cv2.INTER_LINEAR)
+        if pad_h > 0 or pad_w > 0:
+            pred = pred[:h, :w]
+        return (pred > self.mask_seg_threshold).astype(np.uint8)
 
     def _get_bbox(self, anns: List[Dict], orig_h: int, orig_w: int) -> torch.Tensor:
         """获取归一化的bbox坐标
@@ -416,11 +472,34 @@ class ClassificationTransform:
         is_train: bool = True,
         normalize: bool = True,
         strong_aug: bool = False,
+        aug_scale: bool = False,
+        aug_scale_limit: float = 0.2,
+        aug_scale_prob: float = 0.3,
+        aug_affine: bool = False,
+        aug_rotate: bool = False,
+        aug_rotate_limit: float = 15.0,
+        aug_rotate_prob: float = 0.3,
+        aug_rotate_fill: str = "gray",
+        aug_gauss_noise: bool = False,
     ):
         if A is None:
             raise ImportError("albumentations is required for transforms")
 
+        self.is_train = is_train
+        self.aug_scale = aug_scale
+        self.aug_scale_limit = float(aug_scale_limit)
+        self.aug_scale_prob = float(aug_scale_prob)
+        self.aug_affine = aug_affine
+        self.aug_rotate = aug_rotate
+        self.aug_rotate_limit = aug_rotate_limit
+        self.aug_rotate_prob = aug_rotate_prob
+        self.aug_rotate_fill = aug_rotate_fill
+
         ops = []
+
+        # 随机缩放会改变图像尺寸，先执行再统一resize/pad，确保batch尺寸一致
+        if is_train and aug_scale and not aug_affine:
+            ops.append(A.RandomScale(scale_limit=self.aug_scale_limit, p=self.aug_scale_prob))
 
         # 调整尺寸
         ops.extend([
@@ -442,6 +521,20 @@ class ClassificationTransform:
                 val_shift_limit=20,
                 p=0.3,
             ))
+
+            # 独立控制的增强选项
+            if aug_affine:
+                ops.append(A.Affine(
+                    translate_percent=0.1,
+                    scale=(0.8, 1.2),
+                    rotate=(-15, 15),
+                    border_mode=0,
+                    fill=(114, 114, 114),
+                    p=0.3,
+                ))
+
+            if aug_gauss_noise:
+                ops.append(A.GaussNoise(p=0.3))
 
             if strong_aug:
                 ops.extend([
@@ -479,7 +572,66 @@ class ClassificationTransform:
 
         self.transform = A.Compose(ops)
 
+    def _rotate_with_noise(
+        self,
+        image: np.ndarray,
+        mask: Optional[np.ndarray],
+        angle: float,
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        if cv2 is None:
+            raise ImportError("cv2 is required for rotation augmentation")
+
+        h, w = image.shape[:2]
+        center = (w / 2.0, h / 2.0)
+        matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+
+        rotated = cv2.warpAffine(
+            image,
+            matrix,
+            (w, h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+
+        rotated_mask = None
+        if mask is not None:
+            rotated_mask = cv2.warpAffine(
+                mask,
+                matrix,
+                (w, h),
+                flags=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
+
+        valid = cv2.warpAffine(
+            np.ones((h, w), dtype=np.uint8),
+            matrix,
+            (w, h),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+
+        if self.aug_rotate_fill == "noise":
+            noise = np.random.randint(0, 256, image.shape, dtype=np.uint8)
+            rotated[valid == 0] = noise[valid == 0]
+        else:
+            rotated[valid == 0] = 114
+
+        return rotated, rotated_mask
+
     def __call__(self, image: np.ndarray, mask: Optional[np.ndarray] = None) -> Dict[str, torch.Tensor]:
+        if (
+            self.is_train
+            and self.aug_rotate
+            and not self.aug_affine
+            and random.random() < self.aug_rotate_prob
+        ):
+            angle = random.uniform(-self.aug_rotate_limit, self.aug_rotate_limit)
+            image, mask = self._rotate_with_noise(image, mask, angle)
+
         if mask is None:
             return self.transform(image=image)
         result = self.transform(image=image, mask=mask)
@@ -499,8 +651,8 @@ class MaskAugmentation:
         mode: str = "both",  # crop, background, both
         prob: float = 0.5,
         crop_padding: float = 0.1,
-        bg_mode: str = "blur",  # solid, blur, noise
-        bg_color: Tuple[int, int, int] = (114, 114, 114),
+        bg_mode: str = "blur",  # solid, blur, noise, random
+        bg_color: Union[Tuple[int, int, int], str] = (114, 114, 114),  # 支持 "random"
         bg_blur_radius: float = 12.0,
         mask_threshold: float = 0.5,
         mask_dilate: int = 15,  # mask 膨胀像素数，防止边缘模糊
@@ -560,35 +712,58 @@ class MaskAugmentation:
         y2 = min(image.shape[0], y2 + pad_y)
         x2 = min(image.shape[1], x2 + pad_x)
 
-        # 确保裁剪后尺寸有效（至少 1x1）
+        # 确保裁剪后尺寸有效（至少 2x2，避免后续随机缩放产生 0 尺寸）
         if y2 <= y1 or x2 <= x1:
+            return orig_image, orig_mask
+        if (y2 - y1) < 2 or (x2 - x1) < 2:
             return orig_image, orig_mask
 
         cropped_image = image[y1:y2, x1:x2]
         cropped_mask = mask[y1:y2, x1:x2]
 
-        # 确保裁剪后图像非空
-        if cropped_image.shape[0] == 0 or cropped_image.shape[1] == 0:
+        # 确保裁剪后图像非空且足够大
+        if cropped_image.shape[0] < 2 or cropped_image.shape[1] < 2:
             return orig_image, orig_mask
 
         return cropped_image, cropped_mask
 
     def _replace_background(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        if self.bg_mode == "solid":
-            bg = np.full_like(image, self.bg_color, dtype=np.uint8)
-        elif self.bg_mode == "noise":
-            bg = np.random.randint(0, 256, image.shape, dtype=np.uint8)
+        # 确定本次使用的背景模式
+        if self.bg_mode == "random":
+            bg_mode = random.choice(["blur", "solid", "noise"])
         else:
-            bg = np.array(Image.fromarray(image).filter(ImageFilter.GaussianBlur(radius=self.bg_blur_radius)))
-
+            bg_mode = self.bg_mode
         # 膨胀 mask 以保护舌头边缘
         dilated_mask = self._dilate_mask(mask)
 
-        mask_bool = dilated_mask > self.mask_threshold
+        mask_2d = dilated_mask > self.mask_threshold
+        if mask_2d.ndim == 3:
+            mask_2d = mask_2d[:, :, 0]
+        mask_bool = mask_2d
         if mask_bool.ndim == 2:
             mask_bool = np.repeat(mask_bool[:, :, None], 3, axis=2)
         elif mask_bool.ndim == 3 and mask_bool.shape[2] == 1:
             mask_bool = np.repeat(mask_bool, 3, axis=2)
+
+        # 生成背景
+        if bg_mode == "solid":
+            if self.bg_color == "random":
+                color = tuple(random.randint(0, 255) for _ in range(3))
+            else:
+                color = self.bg_color
+            bg = np.full_like(image, color, dtype=np.uint8)
+        elif bg_mode == "noise":
+            bg = np.random.randint(0, 256, image.shape, dtype=np.uint8)
+        else:  # blur
+            # 先抹掉前景再模糊，避免前景颜色泄漏到背景形成白边
+            blur_source = image.copy()
+            blur_source[mask_2d] = 114
+            bg = np.array(
+                Image.fromarray(blur_source).filter(
+                    ImageFilter.GaussianBlur(radius=self.bg_blur_radius)
+                )
+            )
+
         composite = image.copy()
         composite[~mask_bool] = bg[~mask_bool]
         return composite
@@ -603,10 +778,23 @@ def create_classification_dataloaders(
     use_weighted_sampler: bool = False,
     sampler_strategy: str = "sqrt",
     strong_aug: bool = False,
+    aug_scale: bool = False,
+    aug_scale_limit: float = 0.2,
+    aug_scale_prob: float = 0.3,
+    aug_affine: bool = False,
+    aug_rotate: bool = False,
+    aug_rotate_limit: float = 15.0,
+    aug_rotate_prob: float = 0.3,
+    aug_rotate_fill: str = "gray",
+    aug_gauss_noise: bool = False,
     use_basic_types: bool = True,
     return_bbox: bool = False,
     return_mask: bool = False,
     mask_aug: Optional[Callable] = None,
+    mask_source: str = "dataset",
+    mask_seg_weights: Optional[str] = None,
+    mask_seg_device: str = "cpu",
+    mask_seg_threshold: float = 0.5,
 ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader, Dict]:
     """创建分类数据加载器
 
@@ -619,6 +807,15 @@ def create_classification_dataloaders(
         use_weighted_sampler: 是否使用加权采样
         sampler_strategy: 采样策略 ("sqrt" 或 "inverse")
         strong_aug: 是否使用强数据增强
+        aug_scale: 是否使用随机缩放
+        aug_scale_limit: 随机缩放比例范围 (如 0.1 => 0.9~1.1)
+        aug_scale_prob: 随机缩放概率
+        aug_affine: 是否使用随机仿射变换
+        aug_rotate: 是否使用随机旋转
+        aug_rotate_limit: 旋转角度上限（度）
+        aug_rotate_prob: 旋转概率
+        aug_rotate_fill: 旋转背景填充方式 (gray/noise)
+        aug_gauss_noise: 是否使用全局高斯噪声
         use_basic_types: 是否使用舌头基本类型（13类），默认True
         return_bbox: 是否返回bbox
 
@@ -629,10 +826,25 @@ def create_classification_dataloaders(
         image_size=image_size,
         is_train=True,
         strong_aug=strong_aug,
+        aug_scale=aug_scale,
+        aug_scale_limit=aug_scale_limit,
+        aug_scale_prob=aug_scale_prob,
+        aug_affine=aug_affine,
+        aug_rotate=aug_rotate,
+        aug_rotate_limit=aug_rotate_limit,
+        aug_rotate_prob=aug_rotate_prob,
+        aug_rotate_fill=aug_rotate_fill,
+        aug_gauss_noise=aug_gauss_noise,
     )
     val_transform = ClassificationTransform(
         image_size=image_size,
         is_train=False,
+        aug_scale_limit=aug_scale_limit,
+        aug_scale_prob=aug_scale_prob,
+        aug_rotate=aug_rotate,
+        aug_rotate_limit=aug_rotate_limit,
+        aug_rotate_prob=aug_rotate_prob,
+        aug_rotate_fill=aug_rotate_fill,
     )
 
     train_dataset = TongueClassificationDataset(
@@ -645,6 +857,10 @@ def create_classification_dataloaders(
         return_bbox=return_bbox,
         return_mask=return_mask,
         mask_aug=mask_aug,
+        mask_source=mask_source,
+        mask_seg_weights=mask_seg_weights,
+        mask_seg_device=mask_seg_device,
+        mask_seg_threshold=mask_seg_threshold,
     )
     val_dataset = TongueClassificationDataset(
         root=root,
@@ -656,6 +872,10 @@ def create_classification_dataloaders(
         return_bbox=return_bbox,
         return_mask=return_mask,
         mask_aug=None,
+        mask_source=mask_source,
+        mask_seg_weights=mask_seg_weights,
+        mask_seg_device=mask_seg_device,
+        mask_seg_threshold=mask_seg_threshold,
     )
 
     # 采样器

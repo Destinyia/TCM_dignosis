@@ -53,6 +53,8 @@ class ClassificationTrainer:
         seg_loss_weight: float = 0.2,
         use_seg: bool = False,
         visualize_samples: bool = False,
+        print_per_class_metrics: bool = True,
+        epoch_end_callback: Optional[Callable[[int, Dict[str, float], Optional[Dict[str, float]]], None]] = None,
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -80,6 +82,8 @@ class ClassificationTrainer:
         self.seg_loss_weight = seg_loss_weight
         self.use_seg = use_seg
         self.visualize_samples = visualize_samples
+        self.print_per_class_metrics = print_per_class_metrics
+        self.epoch_end_callback = epoch_end_callback
 
         self.scaler = self._create_grad_scaler() if self.amp else None
         self.logger = logging.getLogger(__name__)
@@ -139,6 +143,26 @@ class ClassificationTrainer:
             history["best_macro_f1"] = self.best_metric
             history["timestamp"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             self._append_metrics_history(history)
+
+            # 打印epoch汇总，方便观察过拟合趋势
+            val_loss = val_metrics.get("loss") if val_metrics else None
+            val_acc = val_metrics.get("accuracy") if val_metrics else None
+            val_f1 = val_metrics.get("macro_f1") if val_metrics else None
+            train_loss = train_metrics.get("train_loss")
+            train_acc = train_metrics.get("train_accuracy")
+            loss_text = f"{train_loss:.4f}" if isinstance(train_loss, (int, float)) else "-"
+            acc_text = f"{train_acc:.4f}" if isinstance(train_acc, (int, float)) else "-"
+            val_loss_text = f"{val_loss:.4f}" if isinstance(val_loss, (int, float)) else "-"
+            val_acc_text = f"{val_acc:.4f}" if isinstance(val_acc, (int, float)) else "-"
+            val_f1_text = f"{val_f1:.4f}" if isinstance(val_f1, (int, float)) else "-"
+            print(
+                f"Epoch {epoch + 1}: "
+                f"train_loss={loss_text} train_acc={acc_text} "
+                f"val_loss={val_loss_text} val_acc={val_acc_text} val_f1={val_f1_text}"
+            )
+
+            if self.epoch_end_callback is not None:
+                self.epoch_end_callback(epoch + 1, train_metrics, val_metrics)
 
             # 早停
             if self.early_stop_patience > 0 and self._early_stop_counter >= self.early_stop_patience:
@@ -357,7 +381,8 @@ class ClassificationTrainer:
         if self.mask_seg_loss is not None and self.use_seg:
             avg_seg_loss = total_seg_loss / len(self.val_loader)
             print(f"Seg Loss: {avg_seg_loss:.4f}")
-        self._print_per_class_metrics(per_class_metrics)
+        if self.print_per_class_metrics:
+            self._print_per_class_metrics(per_class_metrics)
 
         # 可视化
         if self.visualize_samples and vis_samples:
@@ -547,7 +572,10 @@ class ClassificationTrainer:
 
     def load_checkpoint(self, path: str) -> Dict[str, float]:
         """加载检查点"""
-        checkpoint = torch.load(path, map_location=self.device)
+        try:
+            checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint["model"])
         if checkpoint.get("optimizer"):
             self.optimizer.load_state_dict(checkpoint["optimizer"])

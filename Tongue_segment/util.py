@@ -153,3 +153,48 @@ def calculate_dice(pred_mask, true_mask):
         return 1.0  # 如果没有前景物体，Dice 为 1.0
     else:
         return (2 * intersection) / total
+
+
+def apply_dense_crf(
+    image: np.ndarray,
+    prob: np.ndarray,
+    iterations: int = 5,
+    sxy_gaussian: int = 3,
+    compat_gaussian: int = 3,
+    sxy_bilateral: int = 80,
+    srgb_bilateral: int = 13,
+    compat_bilateral: int = 10,
+) -> np.ndarray:
+    """Apply DenseCRF to a binary probability map.
+
+    Args:
+        image: HxWx3 uint8 RGB image.
+        prob: HxW float probability map for foreground in [0,1].
+    """
+    try:
+        import pydensecrf.densecrf as dcrf
+        from pydensecrf.utils import unary_from_softmax
+    except Exception as exc:
+        raise ImportError(f"pydensecrf is required for CRF post-processing: {exc}")
+
+    if image.dtype != np.uint8:
+        image = image.astype(np.uint8)
+    if not image.flags["C_CONTIGUOUS"]:
+        image = np.ascontiguousarray(image)
+    h, w = prob.shape[:2]
+    prob = np.clip(prob, 1e-6, 1.0 - 1e-6)
+    softmax = np.stack([1.0 - prob, prob], axis=0)
+    unary = unary_from_softmax(softmax)
+
+    crf = dcrf.DenseCRF2D(w, h, 2)
+    crf.setUnaryEnergy(unary)
+    crf.addPairwiseGaussian(sxy=sxy_gaussian, compat=compat_gaussian)
+    crf.addPairwiseBilateral(
+        sxy=sxy_bilateral,
+        srgb=srgb_bilateral,
+        rgbim=image,
+        compat=compat_bilateral,
+    )
+    q = crf.inference(iterations)
+    refined = np.array(q)[1].reshape((h, w))
+    return refined

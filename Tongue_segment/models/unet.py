@@ -275,7 +275,7 @@ class ResUNet2(nn.Module):
         # 最后的输出层
         out = torch.sigmoid(self.final(d1))  # 输出范围在 [0, 1]
         return out, pred
-    
+
     def _make_layer(self, block, in_channels, out_channels, blocks, stride=1):
         downsample = None
         # 如果输入和输出的维度不同，或者步幅不为1，需要下采样
@@ -290,6 +290,82 @@ class ResUNet2(nn.Module):
         # 第一个残差块可能需要下采样
         layers.append(block(in_channels, out_channels, stride, downsample))
         # 其余的残差块
+        for _ in range(1, blocks):
+            layers.append(block(out_channels, out_channels))
+
+        return nn.Sequential(*layers)
+
+
+class ResUNet2Dist(nn.Module):
+    """ResUNet2 with an extra distance map head."""
+
+    def __init__(self, block=BasicBlock, layers=[2, 2, 2], num_classes=9):
+        super(ResUNet2Dist, self).__init__()
+        self.num_classes = num_classes
+
+        # 编码器部分 (下采样)
+        self.enc1 = ResBlock(3, 32)
+        self.enc2 = self._make_layer(block, 32, 64, layers[0], stride=2)
+        self.enc3 = self._make_layer(block, 64, 128, layers[1], stride=2)
+        self.enc4 = self._make_layer(block, 128, 256, layers[2], stride=2)
+
+        # 中间部分
+        self.middle = ASPP(256, 512)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Sequential(
+            nn.Linear(512, 128),
+            nn.LeakyReLU(0.2),
+            nn.Dropout(0.5),
+            nn.Linear(128, 64),
+            nn.LeakyReLU(0.2),
+            nn.Dropout(0.5),
+            nn.Linear(64, self.num_classes),
+        )
+
+        # 解码器部分 (上采样)
+        self.up4 = UNetUpBlock(512, 256)
+        self.up3 = UNetUpBlock(256, 128)
+        self.up2 = UNetUpBlock(128, 64)
+        self.up1 = UNetUpBlock(64, 32)
+
+        # 分割输出与距离图输出
+        self.final = nn.Conv2d(32, 1, kernel_size=1)
+        self.dist_head = nn.Conv2d(32, 1, kernel_size=1)
+
+    def forward(self, x):
+        # 编码器
+        e1 = self.enc1(x)
+        e2 = self.enc2(e1)
+        e3 = self.enc3(e2)
+        e4 = self.enc4(e3)
+
+        # 中间部分+预测部分
+        middle = self.middle(F.max_pool2d(e4, kernel_size=2))
+        pred = self.avgpool(middle)
+        pred = torch.flatten(pred, 1)
+        pred = self.fc(pred)
+
+        # 解码器
+        d4 = self.up4(middle, e4)
+        d3 = self.up3(d4, e3)
+        d2 = self.up2(d3, e2)
+        d1 = self.up1(d2, e1)
+
+        seg = torch.sigmoid(self.final(d1))
+        dist = torch.sigmoid(self.dist_head(d1))
+        return seg, pred, dist
+
+    def _make_layer(self, block, in_channels, out_channels, blocks, stride=1):
+        downsample = None
+        if stride != 1 or in_channels != out_channels * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels * block.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(in_channels, out_channels, stride, downsample))
         for _ in range(1, blocks):
             layers.append(block(out_channels, out_channels))
 

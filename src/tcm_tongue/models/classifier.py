@@ -81,7 +81,12 @@ class SegAttentionClassifier(nn.Module):
         self, name: str, pretrained: bool
     ) -> Tuple[nn.Module, int]:
         """创建分类backbone"""
-        if name == "resnet50":
+        if name == "resnet34":
+            weights = models.ResNet34_Weights.DEFAULT if pretrained else None
+            backbone = models.resnet34(weights=weights)
+            feature_dim = 512
+            backbone = nn.Sequential(*list(backbone.children())[:-2])
+        elif name == "resnet50":
             weights = models.ResNet50_Weights.DEFAULT if pretrained else None
             backbone = models.resnet50(weights=weights)
             feature_dim = 2048
@@ -94,16 +99,16 @@ class SegAttentionClassifier(nn.Module):
             backbone = nn.Sequential(*list(backbone.children())[:-2])
         elif name == "efficientnet_b0":
             weights = models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
-            backbone = models.efficientnet_b0(weights=weights)
+            backbone = models.efficientnet_b0(weights=weights).features
             feature_dim = 1280
-            backbone.classifier = nn.Identity()
-            backbone.avgpool = nn.Identity()
+        elif name == "efficientnet_b2":
+            weights = models.EfficientNet_B2_Weights.DEFAULT if pretrained else None
+            backbone = models.efficientnet_b2(weights=weights).features
+            feature_dim = 1408
         elif name == "efficientnet_b3":
             weights = models.EfficientNet_B3_Weights.DEFAULT if pretrained else None
-            backbone = models.efficientnet_b3(weights=weights)
+            backbone = models.efficientnet_b3(weights=weights).features
             feature_dim = 1536
-            backbone.classifier = nn.Identity()
-            backbone.avgpool = nn.Identity()
         else:
             raise ValueError(f"Unsupported backbone: {name}")
 
@@ -212,7 +217,12 @@ class DualStreamClassifier(nn.Module):
         self, name: str, pretrained: bool
     ) -> Tuple[nn.Module, int]:
         """创建分类backbone"""
-        if name == "resnet50":
+        if name == "resnet34":
+            weights = models.ResNet34_Weights.DEFAULT if pretrained else None
+            backbone = models.resnet34(weights=weights)
+            feature_dim = 512
+            backbone = nn.Sequential(*list(backbone.children())[:-2])
+        elif name == "resnet50":
             weights = models.ResNet50_Weights.DEFAULT if pretrained else None
             backbone = models.resnet50(weights=weights)
             feature_dim = 2048
@@ -222,6 +232,18 @@ class DualStreamClassifier(nn.Module):
             backbone = models.resnet101(weights=weights)
             feature_dim = 2048
             backbone = nn.Sequential(*list(backbone.children())[:-2])
+        elif name == "efficientnet_b0":
+            weights = models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
+            backbone = models.efficientnet_b0(weights=weights).features
+            feature_dim = 1280
+        elif name == "efficientnet_b2":
+            weights = models.EfficientNet_B2_Weights.DEFAULT if pretrained else None
+            backbone = models.efficientnet_b2(weights=weights).features
+            feature_dim = 1408
+        elif name == "efficientnet_b3":
+            weights = models.EfficientNet_B3_Weights.DEFAULT if pretrained else None
+            backbone = models.efficientnet_b3(weights=weights).features
+            feature_dim = 1536
         else:
             raise ValueError(f"Unsupported backbone: {name}")
 
@@ -274,7 +296,11 @@ class BaselineClassifier(nn.Module):
         super().__init__()
         self.num_classes = num_classes
 
-        if backbone == "resnet50":
+        if backbone == "resnet34":
+            weights = models.ResNet34_Weights.DEFAULT if pretrained else None
+            self.backbone = models.resnet34(weights=weights)
+            feature_dim = 512
+        elif backbone == "resnet50":
             weights = models.ResNet50_Weights.DEFAULT if pretrained else None
             self.backbone = models.resnet50(weights=weights)
             feature_dim = 2048
@@ -286,6 +312,10 @@ class BaselineClassifier(nn.Module):
             weights = models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
             self.backbone = models.efficientnet_b0(weights=weights)
             feature_dim = 1280
+        elif backbone == "efficientnet_b2":
+            weights = models.EfficientNet_B2_Weights.DEFAULT if pretrained else None
+            self.backbone = models.efficientnet_b2(weights=weights)
+            feature_dim = 1408
         elif backbone == "efficientnet_b3":
             weights = models.EfficientNet_B3_Weights.DEFAULT if pretrained else None
             self.backbone = models.efficientnet_b3(weights=weights)
@@ -364,7 +394,12 @@ class SegAttentionClassifierV2(nn.Module):
         self, name: str, pretrained: bool
     ) -> Tuple[nn.Module, int]:
         """创建分类 backbone"""
-        if name == "resnet50":
+        if name == "resnet34":
+            weights = models.ResNet34_Weights.DEFAULT if pretrained else None
+            backbone = models.resnet34(weights=weights)
+            feature_dim = 512
+            backbone = nn.Sequential(*list(backbone.children())[:-2])
+        elif name == "resnet50":
             weights = models.ResNet50_Weights.DEFAULT if pretrained else None
             backbone = models.resnet50(weights=weights)
             feature_dim = 2048
@@ -376,16 +411,16 @@ class SegAttentionClassifierV2(nn.Module):
             backbone = nn.Sequential(*list(backbone.children())[:-2])
         elif name == "efficientnet_b0":
             weights = models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
-            backbone = models.efficientnet_b0(weights=weights)
+            backbone = models.efficientnet_b0(weights=weights).features
             feature_dim = 1280
-            backbone.classifier = nn.Identity()
-            backbone.avgpool = nn.Identity()
+        elif name == "efficientnet_b2":
+            weights = models.EfficientNet_B2_Weights.DEFAULT if pretrained else None
+            backbone = models.efficientnet_b2(weights=weights).features
+            feature_dim = 1408
         elif name == "efficientnet_b3":
             weights = models.EfficientNet_B3_Weights.DEFAULT if pretrained else None
-            backbone = models.efficientnet_b3(weights=weights)
+            backbone = models.efficientnet_b3(weights=weights).features
             feature_dim = 1536
-            backbone.classifier = nn.Identity()
-            backbone.avgpool = nn.Identity()
         else:
             raise ValueError(f"Unsupported backbone: {name}")
 

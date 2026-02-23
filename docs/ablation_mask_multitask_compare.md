@@ -1,4 +1,4 @@
-# Mask 增强与多任务对比实验报告（2026-02-15）
+# Mask 增强与多任务对比实验报告（2026-02-16）
 
 ## 实验说明
 - 数据来源：`runs/ablation_mask_multitask/*/*/metrics_history.jsonl`
@@ -10,7 +10,7 @@
 | B0_baseline | Baseline 无mask增强 | 0.2688 | 0.6514 | 15 |
 | A1_mask_crop | Mask裁剪增强（真实分割mask） | 0.2005 | 0.6303 | 7 |
 | A2_mask_bg_blur | Mask背景模糊（dilate=25） | 0.2909 | 0.6391 | 16 |
-| M1_multitask_seg_v2 | 分类+分割联合训练 | 未运行 | 未运行 | - |
+| M1_multitask_seg_v2 | 分类+分割联合训练 | 0.2444 | 0.6285 | 12 |
 
 ## 结论摘要
 - 最佳实验：`A2_mask_bg_blur`（Best Macro F1=0.2909）。
