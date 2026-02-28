@@ -55,6 +55,7 @@ class ClassificationTrainer:
         visualize_samples: bool = False,
         print_per_class_metrics: bool = True,
         epoch_end_callback: Optional[Callable[[int, Dict[str, float], Optional[Dict[str, float]]], None]] = None,
+        train_batch_callback: Optional[Callable[[int, int, tuple], None]] = None,
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -84,6 +85,7 @@ class ClassificationTrainer:
         self.visualize_samples = visualize_samples
         self.print_per_class_metrics = print_per_class_metrics
         self.epoch_end_callback = epoch_end_callback
+        self.train_batch_callback = train_batch_callback
 
         self.scaler = self._create_grad_scaler() if self.amp else None
         self.logger = logging.getLogger(__name__)
@@ -196,6 +198,9 @@ class ClassificationTrainer:
             else:
                 images, labels = batch[:2]
                 bboxes = None
+
+            if self.train_batch_callback is not None:
+                self.train_batch_callback(self.current_epoch + 1, batch_idx, batch)
 
             images = images.to(self.device)
             labels = labels.to(self.device)
@@ -608,7 +613,7 @@ class ClassificationEvaluator:
         self.class_names = class_names or {}
 
     @torch.no_grad()
-    def evaluate(self) -> Dict[str, float]:
+    def evaluate(self, return_probs: bool = False) -> Dict[str, float]:
         """评估模型"""
         self.model.eval()
         all_preds = []
@@ -622,7 +627,7 @@ class ClassificationEvaluator:
 
             _, predicted = outputs.max(1)
             all_preds.extend(predicted.cpu().numpy())
-            all_labels.extend(labels.numpy())
+            all_labels.extend(labels.cpu().numpy())
             all_probs.extend(probs.cpu().numpy())
 
         import numpy as np
@@ -658,11 +663,16 @@ class ClassificationEvaluator:
                 "support": int(confusion[i, :].sum()),
             }
 
-        return {
+        metrics = {
             "accuracy": accuracy,
             "confusion_matrix": confusion.tolist(),
             "per_class": per_class,
         }
+        if return_probs:
+            metrics["probs"] = probs
+            metrics["labels"] = labels
+            metrics["preds"] = preds
+        return metrics
 
     def print_report(self, metrics: Dict) -> None:
         """打印评估报告"""

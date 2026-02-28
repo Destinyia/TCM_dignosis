@@ -79,8 +79,11 @@ class SeesawLoss(nn.Module):
         if self.training:
             self._update_counts(targets_flat)
 
-        # Compute seesaw weights
-        seesaw_weights = self._compute_seesaw_weights(logits_flat, targets_flat)
+        # Compute seesaw weights without tracking gradients to avoid inplace issues
+        with torch.no_grad():
+            seesaw_weights = self._compute_seesaw_weights(
+                logits_flat.detach(), targets_flat
+            )
 
         # Apply weights to logits
         weighted_logits = logits_flat + torch.log(seesaw_weights + self.eps)

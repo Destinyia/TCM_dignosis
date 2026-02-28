@@ -58,8 +58,101 @@ def parse_args():
                         help="Save predictions to file")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Output directory for predictions")
+    parser.add_argument("--weights-only", action="store_true",
+                        help="Load checkpoint with weights_only=True (safer, may fail for some checkpoints)")
+    parser.add_argument("--plot-confusion", action="store_true",
+                        help="Save confusion matrix plots")
+    parser.add_argument("--plot-calibration", action="store_true",
+                        help="Save calibration plots (reliability + histogram)")
+    parser.add_argument("--calib-bins", type=int, default=10,
+                        help="Number of bins for calibration plot")
 
     return parser.parse_args()
+
+
+def _plot_confusion_matrices(confusion: np.ndarray, class_names: dict, output_dir: str) -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        print(f"Warning: matplotlib not available, skipping confusion plots: {exc}")
+        return
+
+    labels = [class_names.get(i, str(i)) for i in range(confusion.shape[0])]
+    cm = confusion.astype(float)
+    cm_norm = cm / cm.sum(axis=1, keepdims=True)
+    cm_norm = np.nan_to_num(cm_norm)
+
+    def _plot(cm_data: np.ndarray, title: str, filename: str) -> None:
+        fig, ax = plt.subplots(figsize=(8, 7))
+        im = ax.imshow(cm_data, interpolation="nearest", cmap="Blues")
+        ax.set_title(title)
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        ax.set_xticks(np.arange(len(labels)))
+        ax.set_yticks(np.arange(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_yticklabels(labels)
+        ax.set_ylabel("True")
+        ax.set_xlabel("Pred")
+        fig.tight_layout()
+        fig.savefig(os.path.join(output_dir, filename), dpi=150)
+        plt.close(fig)
+
+    _plot(cm, "Confusion Matrix (Raw)", "confusion_raw.png")
+    _plot(cm_norm, "Confusion Matrix (Normalized)", "confusion_norm.png")
+
+
+def _plot_calibration(probs: np.ndarray, labels: np.ndarray, output_dir: str, bins: int = 10) -> None:
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        print(f"Warning: matplotlib not available, skipping calibration plot: {exc}")
+        return
+
+    confidences = probs.max(axis=1)
+    predictions = probs.argmax(axis=1)
+    correct = (predictions == labels).astype(float)
+
+    bin_edges = np.linspace(0.0, 1.0, bins + 1)
+    bin_ids = np.digitize(confidences, bin_edges, right=True) - 1
+    bin_ids = np.clip(bin_ids, 0, bins - 1)
+
+    bin_acc = np.zeros(bins, dtype=float)
+    bin_conf = np.zeros(bins, dtype=float)
+    bin_counts = np.zeros(bins, dtype=float)
+
+    for b in range(bins):
+        mask = bin_ids == b
+        if not np.any(mask):
+            continue
+        bin_counts[b] = mask.sum()
+        bin_acc[b] = correct[mask].mean()
+        bin_conf[b] = confidences[mask].mean()
+
+    total = bin_counts.sum() if bin_counts.sum() > 0 else 1.0
+    ece = np.sum(np.abs(bin_acc - bin_conf) * (bin_counts / total))
+
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(7, 8), gridspec_kw={"height_ratios": [2, 1]}
+    )
+    ax1.plot([0, 1], [0, 1], "k--", label="Ideal")
+    ax1.bar(bin_centers, bin_acc, width=1.0 / bins, edgecolor="black", alpha=0.7, label="Accuracy")
+    ax1.plot(bin_centers, bin_conf, "o-", label="Confidence")
+    ax1.set_xlim(0, 1)
+    ax1.set_ylim(0, 1)
+    ax1.set_ylabel("Accuracy")
+    ax1.set_title(f"Calibration (ECE={ece:.4f})")
+    ax1.legend()
+
+    ax2.hist(confidences, bins=bin_edges, edgecolor="black")
+    ax2.set_xlim(0, 1)
+    ax2.set_xlabel("Confidence")
+    ax2.set_ylabel("Count")
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(output_dir, "calibration.png"), dpi=150)
+    plt.close(fig)
 
 
 def main():
@@ -114,7 +207,11 @@ def main():
 
     # 加载检查点
     print(f"Loading checkpoint: {args.checkpoint}")
-    checkpoint = torch.load(args.checkpoint, map_location=args.device)
+    checkpoint = torch.load(
+        args.checkpoint,
+        map_location=args.device,
+        weights_only=args.weights_only,
+    )
     if "model" in checkpoint:
         model.load_state_dict(checkpoint["model"])
     else:
@@ -129,7 +226,8 @@ def main():
     )
 
     print("\nEvaluating...")
-    metrics = evaluator.evaluate()
+    need_probs = args.plot_confusion or args.plot_calibration
+    metrics = evaluator.evaluate(return_probs=need_probs)
     evaluator.print_report(metrics)
 
     # 保存预测结果
@@ -144,6 +242,29 @@ def main():
             accuracy=metrics["accuracy"],
         )
         print(f"\nPredictions saved to: {output_path}")
+
+    # 可视化输出
+    output_dir = args.output_dir or os.path.dirname(args.checkpoint)
+    if (args.plot_confusion or args.plot_calibration) and output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    if args.plot_confusion:
+        _plot_confusion_matrices(
+            np.array(metrics["confusion_matrix"]),
+            dataset.get_class_names(),
+            output_dir,
+        )
+
+    if args.plot_calibration:
+        if "probs" not in metrics or "labels" not in metrics:
+            print("Warning: calibration plot requested but probabilities are unavailable.")
+        else:
+            _plot_calibration(
+                metrics["probs"],
+                metrics["labels"],
+                output_dir,
+                bins=args.calib_bins,
+            )
 
 
 if __name__ == "__main__":

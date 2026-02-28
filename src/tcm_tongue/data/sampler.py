@@ -185,9 +185,13 @@ def _resolve_dataset_indices(dataset):
 
 
 def _select_image_infos(dataset, indices):
+    if hasattr(dataset, "valid_images"):
+        images = list(dataset.valid_images)
+    else:
+        images = list(dataset.images)
     if indices is None:
-        return list(dataset.images)
-    return [dataset.images[i] for i in indices]
+        return images
+    return [images[i] for i in indices]
 
 
 def _get_category_counts(dataset, indices):
